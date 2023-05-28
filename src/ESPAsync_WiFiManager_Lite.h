@@ -116,8 +116,8 @@
     // LittleFS has higher priority than SPIFFS.
     // For core v2.0.0+, if not specified any, use better LittleFS
     #if ! (defined(USE_LITTLEFS) || defined(USE_SPIFFS) )
-      #define USE_LITTLEFS      true
-      #define USE_SPIFFS        false
+      #define USE_LITTLEFS      false
+      #define USE_SPIFFS        true
     #endif
   #elif defined(ARDUINO_ESP32C3_DEV)
     // For core v1.0.6-, ESP32-C3 only supporting SPIFFS and EEPROM. To use v2.0.0+ for LittleFS
@@ -178,6 +178,7 @@
 
 #define HTTP_PORT     80
 #define DNS_PORT      53
+#define FORMAT_FS     false
 
 ///////////////////////////////////////////
 
@@ -1312,7 +1313,7 @@ class ESPAsync_WiFiManager_Lite
       if (!FileFS.begin())
   #else
       // Format SPIFFS if not yet
-      if (!FileFS.begin(true))
+      if (!FileFS.begin(FORMAT_FS))
   #endif
       {
         ESP_WML_LOGERROR(F("SPIFFS/LittleFS failed!"));
@@ -1339,7 +1340,7 @@ class ESPAsync_WiFiManager_Lite
       if (!FileFS.begin())
   #else
       // Format SPIFFS if not yet
-      if (!FileFS.begin(true))
+      if (!FileFS.begin(FORMAT_FS))
   #endif
       {
         ESP_WML_LOGERROR(F("SPIFFS/LittleFS failed!"));
@@ -2031,7 +2032,7 @@ class ESPAsync_WiFiManager_Lite
 #else
 
       // Format SPIFFS if not yet
-      if (!FileFS.begin(true))
+      if (!FileFS.begin(FORMAT_FS))
       {
         ESP_WML_LOGERROR(F("SPIFFS/LittleFS failed! Formatting."));
 #endif
@@ -3028,6 +3029,19 @@ class ESPAsync_WiFiManager_Lite
   #define CONFIG_TIMEOUT      60000L
 #endif
 
+  void listSPIFFSFiles() {
+    Serial.println("List of files in SPIFFS:");
+    
+    File root = SPIFFS.open("/");
+    File file = root.openNextFile();
+
+    while (file) {
+      Serial.print("File: ");
+      Serial.println(file.name());
+      file.close();
+      file = root.openNextFile();
+    }
+  }
     void startConfigurationMode()
     {
 #if SCAN_WIFI_NETWORKS
@@ -3052,6 +3066,7 @@ class ESPAsync_WiFiManager_Lite
       }
 
       WiFi.mode(WIFI_AP);
+      listSPIFFSFiles();
 
       // New
       delay(100);
@@ -3098,7 +3113,22 @@ class ESPAsync_WiFiManager_Lite
         // reply to all requests with same HTML
         server->onNotFound([this](AsyncWebServerRequest * request)
         {
-          handleRequest(request);
+          //// PATCH BEGIN ////
+          String path = request->url();
+          Serial.print(F("HANDLE REQUEST: "));
+          Serial.println(path);
+          AsyncWebServerResponse *response = request->beginResponse(FileFS, path);
+          if (response != NULL) {
+            request->send(response);
+            return;
+          }
+          response = request->beginResponse(FileFS, "/index.html");
+          if (response != NULL) {
+            request->send(response);
+            return;
+          }
+          //// PATCH END ////
+          // handleRequest(request);
         });
         
         server->begin();
