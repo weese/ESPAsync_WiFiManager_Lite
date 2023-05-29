@@ -227,10 +227,6 @@
 #endif
 
 #if SCAN_WIFI_NETWORKS
-  #if !defined(MANUAL_SSID_INPUT_ALLOWED)
-    #define MANUAL_SSID_INPUT_ALLOWED     true
-  #endif
-
   #if !defined(MAX_SSID_IN_LIST)
     #define MAX_SSID_IN_LIST     10
   #elif (MAX_SSID_IN_LIST < 2)
@@ -362,7 +358,6 @@
 typedef struct
 {
   char id             [MAX_ID_LEN + 1];
-  char displayName    [MAX_DISPLAY_NAME_LEN + 1];
   char *pdata;
   uint8_t maxlen;
 } MenuItem;
@@ -427,70 +422,6 @@ uint16_t CONFIG_DATA_SIZE = sizeof(ESP_WM_LITE_Configuration);
 extern bool LOAD_DEFAULT_CONFIG_DATA;
 extern ESP_WM_LITE_Configuration defaultConfig;
 
-///////////////////////////////////////////
-
-// -- HTML page fragments
-
-const char ESP_WM_LITE_HTML_HEAD_START[] PROGMEM = "<!DOCTYPE html><html><head><title>ESP_ASYNC_WM_LITE</title><meta name='viewport' content='width=device-width, initial-scale=1'>";
-
-const char ESP_WM_LITE_HTML_HEAD_STYLE[] PROGMEM =
-  "<style>div,input{padding:5px;font-size:1em;}input{width:95%;}body{text-align: center;}button{background-color:#16A1E7;color:#fff;line-height:2.4rem;font-size:1.2rem;width:100%;}fieldset{border-radius:0.3rem;margin:0px;}</style>";
-
-#if USING_BOARD_NAME
-  const char ESP_WM_LITE_HTML_HEAD_END[]   PROGMEM =
-  "</head><div style='text-align:left;display:inline-block;min-width:260px;'>\
-  <fieldset><div><label>*WiFi SSID</label><div>[[input_id]]</div></div>\
-  <div><label>*PWD (8+ chars)</label><input value='[[pw]]' id='pw'><div></div></div>\
-  <div><label>*WiFi SSID1</label><div>[[input_id1]]</div></div>\
-  <div><label>*PWD1 (8+ chars)</label><input value='[[pw1]]' id='pw1'><div></div></div></fieldset>\
-  <fieldset><div><label>Board Name</label><input value='[[nm]]' id='nm'><div></div></div></fieldset>";  // DO NOT CHANGE THIS STRING EVER!!!!
-#else
-  const char ESP_WM_LITE_HTML_HEAD_END[]   PROGMEM =
-  "</head><div style='text-align:left;display:inline-block;min-width:260px;'>\
-  <fieldset><div><label>*WiFi SSID</label><div>[[input_id]]</div></div>\
-  <div><label>*PWD (8+ chars)</label><input value='[[pw]]' id='pw'><div></div></div>\
-  <div><label>*WiFi SSID1</label><div>[[input_id1]]</div></div>\
-  <div><label>*PWD1 (8+ chars)</label><input value='[[pw1]]' id='pw1'><div></div></div></fieldset>";  // DO NOT CHANGE THIS STRING EVER!!!!
-#endif
-
-const char ESP_WM_LITE_HTML_INPUT_ID[]   PROGMEM = "<input value='[[id]]' id='id'>";
-const char ESP_WM_LITE_HTML_INPUT_ID1[]  PROGMEM = "<input value='[[id1]]' id='id1'>";
-
-const char ESP_WM_LITE_FLDSET_START[]  PROGMEM = "<fieldset>";
-const char ESP_WM_LITE_FLDSET_END[]    PROGMEM = "</fieldset>";
-const char ESP_WM_LITE_HTML_PARAM[]    PROGMEM =
-  "<div><label>{b}</label><input value='[[{v}]]'id='{i}'><div></div></div>";
-const char ESP_WM_LITE_HTML_BUTTON[]   PROGMEM = "<button onclick=\"sv()\">Save</button></div>";
-
-#if USING_BOARD_NAME
-  const char ESP_WM_LITE_HTML_SCRIPT[]   PROGMEM = "<script id=\"jsbin-javascript\">\
-  function udVal(key,val){var request=new XMLHttpRequest();var url='/?key='+key+'&value='+encodeURIComponent(val);\
-  request.open('GET',url,false);request.send(null);}\
-  function sv(){udVal('id',document.getElementById('id').value);udVal('pw',document.getElementById('pw').value);\
-  udVal('id1',document.getElementById('id1').value);udVal('pw1',document.getElementById('pw1').value);\
-  udVal('nm',document.getElementById('nm').value);";
-#else
-  const char ESP_WM_LITE_HTML_SCRIPT[]   PROGMEM = "<script id=\"jsbin-javascript\">\
-  function udVal(key,val){var request=new XMLHttpRequest();var url='/?key='+key+'&value='+encodeURIComponent(val);\
-  request.open('GET',url,false);request.send(null);}\
-  function sv(){udVal('id',document.getElementById('id').value);udVal('pw',document.getElementById('pw').value);\
-  udVal('id1',document.getElementById('id1').value);udVal('pw1',document.getElementById('pw1').value);";
-#endif
-
-const char ESP_WM_LITE_HTML_SCRIPT_ITEM[]  PROGMEM = "udVal('{d}',document.getElementById('{d}').value);";
-const char ESP_WM_LITE_HTML_SCRIPT_END[]   PROGMEM = "alert('Updated');}</script>";
-const char ESP_WM_LITE_HTML_END[]          PROGMEM = "</html>";
-
-#if SCAN_WIFI_NETWORKS
-  const char ESP_WM_LITE_SELECT_START[]      PROGMEM = "<select id=";
-  const char ESP_WM_LITE_SELECT_END[]        PROGMEM = "</select>";
-  const char ESP_WM_LITE_DATALIST_START[]    PROGMEM = "<datalist id=";
-  const char ESP_WM_LITE_DATALIST_END[]      PROGMEM = "</datalist>";
-  const char ESP_WM_LITE_OPTION_START[]      PROGMEM = "<option>";
-  const char ESP_WM_LITE_OPTION_END[]        PROGMEM = "";      // "</option>"; is not required
-  const char ESP_WM_LITE_NO_NETWORKS_FOUND[] PROGMEM = "No suitable WiFi networks available!";
-#endif
-
 //////////////////////////////////////////
 
 //KH Add repeatedly used const
@@ -498,6 +429,7 @@ const char ESP_WM_LITE_HTML_END[]          PROGMEM = "</html>";
 const char WM_HTTP_HEAD_CL[]         PROGMEM = "Content-Length";
 const char WM_HTTP_HEAD_TEXT_HTML[]  PROGMEM = "text/html";
 const char WM_HTTP_HEAD_TEXT_PLAIN[] PROGMEM = "text/plain";
+const char WM_HTTP_HEAD_TEXT_JSON[]  PROGMEM = "text/json";
 
 const char WM_HTTP_CACHE_CONTROL[]   PROGMEM = "Cache-Control";
 const char WM_HTTP_NO_STORE[]        PROGMEM = "no-cache, no-store, must-revalidate";
@@ -1238,49 +1170,7 @@ class ESPAsync_WiFiManager_Lite
 
     //////////////////////////////////////
 
-    // Add customs headers from v1.2.0
-
     // New from v1.2.0, for configure CORS Header, default to WM_HTTP_CORS_ALLOW_ALL = "*"
-
-#if USING_CUSTOMS_STYLE
-    //sets a custom style, such as color
-    // "<style>div,input{padding:5px;font-size:1em;}
-    // input{width:95%;}body{text-align: center;}
-    // button{background-color:#16A1E7;color:#fff;line-height:2.4rem;font-size:1.2rem;width:100%;}
-    // fieldset{border-radius:0.3rem;margin:0px;}</style>";
-    void setCustomsStyle(PGM_P CustomsStyle = ESP_WM_LITE_HTML_HEAD_STYLE)
-    {
-      _CustomsHeadStyle = CustomsStyle;
-      ESP_WML_LOGDEBUG1(F("Set CustomsStyle to : "), FPSTR(_CustomsHeadStyle));
-    }
-
-    //////////////////////////////////////
-
-    PGM_P getCustomsStyle()
-    {
-      ESP_WML_LOGDEBUG1(F("Get CustomsStyle = "), FPSTR(_CustomsHeadStyle));
-      return _CustomsHeadStyle;
-    }
-#endif
-
-    //////////////////////////////////////
-
-#if USING_CUSTOMS_HEAD_ELEMENT
-    //sets a custom element to add to head, like a new style tag
-    void setCustomsHeadElement(PGM_P CustomsHeadElement = NULL)
-    {
-      _CustomsHeadElement = CustomsHeadElement;
-      ESP_WML_LOGDEBUG1(F("Set CustomsHeadElement to : "), _CustomsHeadElement);
-    }
-
-    //////////////////////////////////////
-
-    PGM_P getCustomsHeadElement()
-    {
-      ESP_WML_LOGDEBUG1(F("Get CustomsHeadElement = "), _CustomsHeadElement);
-      return _CustomsHeadElement;
-    }
-#endif
 
     //////////////////////////////////////
 
@@ -1402,16 +1292,6 @@ class ESPAsync_WiFiManager_Lite
     IPAddress static_DNS2 = IPAddress(0, 0, 0, 0);
 
     /////////////////////////////////////
-
-    // Add customs headers from v1.2.0
-
-#if USING_CUSTOMS_STYLE
-    PGM_P _CustomsHeadStyle = nullptr;
-#endif
-
-#if USING_CUSTOMS_HEAD_ELEMENT
-    PGM_P _CustomsHeadElement = nullptr;
-#endif
 
 #if USING_CORS_FEATURE
     PGM_P _CORS_Header = WM_HTTP_CORS_ALLOW_ALL;   // "*";
@@ -2649,377 +2529,164 @@ class ESPAsync_WiFiManager_Lite
 
     //////////////////////////////////////////////
 
-    // NEW
-    void createHTML(String& root_html_template)
+    void jsonComma(String &json) {
+      if (json.length()) {
+        char lastChar = json[json.length() - 1];
+        if (lastChar != '{' && lastChar != '[')
+          json += ',';
+      }
+    }
+
+    void jsonAppendValue(String &json, String value)
     {
-      String pitem;
+      jsonComma(json);
+      json += '"';
+      value.replace(FPSTR("\""), FPSTR("\\\""));
+      json += value;
+      json += '"';
+    }
 
-      root_html_template = FPSTR(ESP_WM_LITE_HTML_HEAD_START);
+    void jsonAppendKeyValue(String &json, String const &key, String value)
+    {
+      jsonComma(json);
+      json += '"';
+      json += key;
+      json += FPSTR("\":\"");
+      value.replace(FPSTR("\""), FPSTR("\\\""));
+      json += value;
+      json += '"';
+    }
 
-#if USING_CUSTOMS_STYLE
-
-      // Using Customs style when not NULL
-      if (_CustomsHeadStyle)
-        root_html_template += FPSTR(_CustomsHeadStyle);
-      else
-        root_html_template += FPSTR(ESP_WM_LITE_HTML_HEAD_STYLE);
-
-#else
-      root_html_template += FPSTR(ESP_WM_LITE_HTML_HEAD_STYLE);
-#endif
-
-#if USING_CUSTOMS_HEAD_ELEMENT
-
-      if (_CustomsHeadElement)
-        root_html_template += _CustomsHeadElement;
-
-#endif
+    void createConfigJson(String& json)
+    {
+      json = '{';
 
 #if SCAN_WIFI_NETWORKS
 
-      ESP_WML_LOGDEBUG1(WiFiNetworksFound, F(" SSIDs found, generating HTML now"));
-      // Replace HTML <input...> with <select...>, based on WiFi network scan in startConfigurationMode()
-
-      ListOfSSIDs = "";
-
+      json += FPSTR("\"wifis\":[");
       for (int i = 0, list_items = 0; (i < WiFiNetworksFound) && (list_items < MAX_SSID_IN_LIST); i++)
       {
         if (indices[i] == -1)
           continue;     // skip duplicates and those that are below the required quality
 
-        ListOfSSIDs += String(FPSTR(ESP_WM_LITE_OPTION_START)) + String(WiFi.SSID(indices[i])) + String(FPSTR(ESP_WM_LITE_OPTION_END));
+        jsonAppendValue(json, WiFi.SSID(indices[i]));
         list_items++;   // Count number of suitable, distinct SSIDs to be included in list
       }
-
-      ESP_WML_LOGDEBUG(ListOfSSIDs);
-
-      if (ListOfSSIDs == "")    // No SSID found or none was good enough
-        ListOfSSIDs = String(FPSTR(ESP_WM_LITE_OPTION_START)) + String(FPSTR(ESP_WM_LITE_NO_NETWORKS_FOUND)) + String(FPSTR(ESP_WM_LITE_OPTION_END));
-
-      pitem = String(FPSTR(ESP_WM_LITE_HTML_HEAD_END));
-
-#if MANUAL_SSID_INPUT_ALLOWED
-      pitem.replace("[[input_id]]",  "<input id='id' list='SSIDs'>"  + String(FPSTR(ESP_WM_LITE_DATALIST_START)) + "'SSIDs'>" +
-                    ListOfSSIDs + FPSTR(ESP_WM_LITE_DATALIST_END));
-      ESP_WML_LOGDEBUG1(F("pitem:"), pitem);
-      pitem.replace("[[input_id1]]", "<input id='id1' list='SSIDs'>" + String(FPSTR(ESP_WM_LITE_DATALIST_START)) + "'SSIDs'>" +
-                    ListOfSSIDs + FPSTR(ESP_WM_LITE_DATALIST_END));
-      ESP_WML_LOGDEBUG1(F("pitem:"), pitem);
-#else
-      pitem.replace("[[input_id]]",  "<select id='id'>"  + ListOfSSIDs + FPSTR(ESP_WM_LITE_SELECT_END));
-      pitem.replace("[[input_id1]]", "<select id='id1'>" + ListOfSSIDs + FPSTR(ESP_WM_LITE_SELECT_END));
-#endif
-
-      root_html_template += pitem + FPSTR(ESP_WM_LITE_FLDSET_START);
-
-#else
-
-      pitem = String(FPSTR(ESP_WM_LITE_HTML_HEAD_END));
-      pitem.replace("[[input_id]]",  FPSTR(ESP_WM_LITE_HTML_INPUT_ID));
-      pitem.replace("[[input_id1]]", FPSTR(ESP_WM_LITE_HTML_INPUT_ID1));
-      root_html_template += pitem + FPSTR(ESP_WM_LITE_FLDSET_START);
+      json += ']';
 
 #endif    // SCAN_WIFI_NETWORKS
 
-#if USE_DYNAMIC_PARAMETERS
-
-      for (uint16_t i = 0; i < NUM_MENU_ITEMS; i++)
-      {
-        pitem = String(FPSTR(ESP_WM_LITE_HTML_PARAM));
-
-        pitem.replace("{b}", myMenuItems[i].displayName);
-        pitem.replace("{v}", myMenuItems[i].id);
-        pitem.replace("{i}", myMenuItems[i].id);
-
-        root_html_template += pitem;
-      }
-
+    if (hadConfigData) {
+      jsonAppendKeyValue(json, FPSTR("id"), ESP_WM_LITE_config.WiFi_Creds[0].wifi_ssid);
+      jsonAppendKeyValue(json, FPSTR("pw"), ESP_WM_LITE_config.WiFi_Creds[0].wifi_pw);
+      jsonAppendKeyValue(json, FPSTR("id1"), ESP_WM_LITE_config.WiFi_Creds[1].wifi_ssid);
+      jsonAppendKeyValue(json, FPSTR("pw1"), ESP_WM_LITE_config.WiFi_Creds[1].wifi_pw);
+#if USING_BOARD_NAME
+      jsonAppendKeyValue(json, FPSTR("nm"), ESP_WM_LITE_config.board_name);
 #endif
-
-      root_html_template += String(FPSTR(ESP_WM_LITE_FLDSET_END)) + FPSTR(ESP_WM_LITE_HTML_BUTTON) + FPSTR(ESP_WM_LITE_HTML_SCRIPT);
+    }
 
 #if USE_DYNAMIC_PARAMETERS
 
       for (uint16_t i = 0; i < NUM_MENU_ITEMS; i++)
-      {
-        pitem = String(FPSTR(ESP_WM_LITE_HTML_SCRIPT_ITEM));
-
-        pitem.replace("{d}", myMenuItems[i].id);
-
-        root_html_template += pitem;
-      }
+        jsonAppendKeyValue(json, myMenuItems[i].id, myMenuItems[i].pdata);
 
 #endif
 
-      root_html_template += String(FPSTR(ESP_WM_LITE_HTML_SCRIPT_END)) + FPSTR(ESP_WM_LITE_HTML_END);
-
-      return;
+      if ( RFC952_hostname[0] != 0 )
+      {
+        // Replace only if Hostname is valid
+        jsonAppendKeyValue(json, FPSTR("ESP_ASYNC_WM_LITE"), RFC952_hostname);
+      }
+      else if ( ESP_WM_LITE_config.board_name[0] != 0 )
+      {
+        // Or replace only if board_name is valid.  Otherwise, keep intact
+        jsonAppendKeyValue(json, FPSTR("ESP_ASYNC_WM_LITE"), ESP_WM_LITE_config.board_name);
+      }
+      json += '}';
     }
 
     //////////////////////////////////////////////
 
-    void handleRequest(AsyncWebServerRequest *request)
-    {
-      if (request)
-      {
-        String key = request->arg("key");
-        String value = request->arg("value");
-
-        static int number_items_Updated = 0;
-
-        if (key == "" && value == "")
-        {
-          String result;
-          createHTML(result);
-
-          //ESP_WML_LOGDEBUG1(F("h:Repl:"), result);
-
-          // Reset configTimeout to stay here until finished.
-          configTimeout = 0;
-
-          if ( RFC952_hostname[0] != 0 )
-          {
-            // Replace only if Hostname is valid
-            result.replace("ESP_ASYNC_WM_LITE", RFC952_hostname);
-          }
-          else if ( ESP_WM_LITE_config.board_name[0] != 0 )
-          {
-            // Or replace only if board_name is valid.  Otherwise, keep intact
-            result.replace("ESP_ASYNC_WM_LITE", ESP_WM_LITE_config.board_name);
-          }
-
-          if (hadConfigData)
-          {
-            result.replace("[[id]]",     ESP_WM_LITE_config.WiFi_Creds[0].wifi_ssid);
-            result.replace("[[pw]]",     ESP_WM_LITE_config.WiFi_Creds[0].wifi_pw);
-            result.replace("[[id1]]",    ESP_WM_LITE_config.WiFi_Creds[1].wifi_ssid);
-            result.replace("[[pw1]]",    ESP_WM_LITE_config.WiFi_Creds[1].wifi_pw);
-
-#if USING_BOARD_NAME
-            result.replace("[[nm]]",     ESP_WM_LITE_config.board_name);
-#endif
-          }
-          else
-          {
-            result.replace("[[id]]",  "");
-            result.replace("[[pw]]",  "");
-            result.replace("[[id1]]", "");
-            result.replace("[[pw1]]", "");
-
-#if USING_BOARD_NAME
-            result.replace("[[nm]]",  "");
-#endif
-          }
-
-#if USE_DYNAMIC_PARAMETERS
-
-          for (uint16_t i = 0; i < NUM_MENU_ITEMS; i++)
-          {
-            String toChange = String("[[") + myMenuItems[i].id + "]]";
-            result.replace(toChange, myMenuItems[i].pdata);
-          }
-
-#endif
-
-          ESP_WML_LOGDEBUG1(F("h:HTML page size:"), result.length());
-          ESP_WML_LOGDEBUG1(F("h:HTML="), result);
-
+    void getConfig(AsyncWebServerRequest *request) {
+      String json;
+      createConfigJson(json);
 
 #if ( ARDUINO_ESP32S2_DEV || ARDUINO_FEATHERS2 || ARDUINO_PROS2 || ARDUINO_MICROS2 )
 
-          request->send(200, FPSTR(WM_HTTP_HEAD_TEXT_HTML), result);
+      request->send(200, FPSTR(WM_HTTP_HEAD_TEXT_HTML), json);
 
-          // Fix ESP32-S2 issue with WebServer (https://github.com/espressif/arduino-esp32/issues/4348)
-          delay(1);
+      // Fix ESP32-S2 issue with WebServer (https://github.com/espressif/arduino-esp32/issues/4348)
+      delay(1);
 #else
 
-          AsyncWebServerResponse *response = request->beginResponse(200, FPSTR(WM_HTTP_HEAD_TEXT_HTML), result);
-          response->addHeader(FPSTR(WM_HTTP_CACHE_CONTROL), FPSTR(WM_HTTP_NO_STORE));
+      AsyncWebServerResponse *response = request->beginResponse(200, FPSTR(WM_HTTP_HEAD_TEXT_JSON), json);
+      response->addHeader(FPSTR(WM_HTTP_CACHE_CONTROL), FPSTR(WM_HTTP_NO_STORE));
 
 #if USING_CORS_FEATURE
-          // New from v1.2.0, for configure CORS Header, default to WM_HTTP_CORS_ALLOW_ALL = "*"
-          ESP_WML_LOGDEBUG3(F("handleRequest:WM_HTTP_CORS:"), WM_HTTP_CORS, " : ", _CORS_Header);
-          response->addHeader(FPSTR(WM_HTTP_CORS), _CORS_Header);
+      // New from v1.2.0, for configure CORS Header, default to WM_HTTP_CORS_ALLOW_ALL = "*"
+      ESP_WML_LOGDEBUG3(F("handleRequest:WM_HTTP_CORS:"), WM_HTTP_CORS, " : ", _CORS_Header);
+      response->addHeader(FPSTR(WM_HTTP_CORS), _CORS_Header);
 #endif
 
-          response->addHeader(FPSTR(WM_HTTP_PRAGMA), FPSTR(WM_HTTP_NO_CACHE));
-          response->addHeader(FPSTR(WM_HTTP_EXPIRES), "-1");
-
-          request->send(response);
+      response->addHeader(FPSTR(WM_HTTP_PRAGMA), FPSTR(WM_HTTP_NO_CACHE));
+      response->addHeader(FPSTR(WM_HTTP_EXPIRES), "-1");
+      request->send(response);
 
 #endif    // ARDUINO_ESP32S2_DEV
+    }
 
-          return;
-        }
+    void parseParam(AsyncWebServerRequest *request, const char *id, char *pdata, uint8_t maxlen)
+    {
+      AsyncWebParameter *param = request->getParam(id, true);
+      if (param != NULL) {
+        ESP_WML_LOGDEBUG3(F("h:"), id, F("="), param->value().c_str());
+        strncpy(pdata, param->value().c_str(), maxlen - 1);
+        pdata[maxlen - 1] = '\0';
+      }
+    }
 
-        if (number_items_Updated == 0)
-        {
-          memset(&ESP_WM_LITE_config, 0, sizeof(ESP_WM_LITE_config));
-          strcpy(ESP_WM_LITE_config.header, ESP_WM_LITE_BOARD_TYPE);
-        }
+    void updateConfig(AsyncWebServerRequest *request)
+    {
+      memset(&ESP_WM_LITE_config, 0, sizeof(ESP_WM_LITE_config));
+      strcpy(ESP_WM_LITE_config.header, ESP_WM_LITE_BOARD_TYPE);
 
-#if USE_DYNAMIC_PARAMETERS
-
-        if (!menuItemUpdated)
-        {
-          // Don't need to free
-          menuItemUpdated = new bool[NUM_MENU_ITEMS];
-
-          if (menuItemUpdated)
-          {
-            for (uint16_t i = 0; i < NUM_MENU_ITEMS; i++)
-            {
-              // To flag item is not yet updated
-              menuItemUpdated[i] = false;
-            }
-
-            ESP_WML_LOGDEBUG(F("h: Init menuItemUpdated" ));
-          }
-          else
-          {
-            ESP_WML_LOGERROR(F("h: Error can't alloc memory for menuItemUpdated" ));
-          }
-        }
-
-#endif
-
-        static bool id_Updated  = false;
-        static bool pw_Updated  = false;
-        static bool id1_Updated = false;
-        static bool pw1_Updated = false;
-
+      parseParam(request, FPSTR("id"), ESP_WM_LITE_config.WiFi_Creds[0].wifi_ssid, SSID_MAX_LEN);
+      parseParam(request, FPSTR("pw"), ESP_WM_LITE_config.WiFi_Creds[0].wifi_pw, PASS_MAX_LEN);
+      parseParam(request, FPSTR("id1"), ESP_WM_LITE_config.WiFi_Creds[1].wifi_ssid, SSID_MAX_LEN);
+      parseParam(request, FPSTR("pw1"), ESP_WM_LITE_config.WiFi_Creds[1].wifi_pw, PASS_MAX_LEN);
 #if USING_BOARD_NAME
-        static bool nm_Updated  = false;
-#endif
-
-        if (!id_Updated && (key == String("id")))
-        {
-          ESP_WML_LOGDEBUG(F("h:repl id"));
-          id_Updated = true;
-
-          number_items_Updated++;
-
-          if (strlen(value.c_str()) < sizeof(ESP_WM_LITE_config.WiFi_Creds[0].wifi_ssid) - 1)
-            strcpy(ESP_WM_LITE_config.WiFi_Creds[0].wifi_ssid, value.c_str());
-          else
-            strncpy(ESP_WM_LITE_config.WiFi_Creds[0].wifi_ssid, value.c_str(),
-                    sizeof(ESP_WM_LITE_config.WiFi_Creds[0].wifi_ssid) - 1);
-        }
-        else if (!pw_Updated && (key == String("pw")))
-        {
-          ESP_WML_LOGDEBUG(F("h:repl pw"));
-          pw_Updated = true;
-
-          number_items_Updated++;
-
-          if (strlen(value.c_str()) < sizeof(ESP_WM_LITE_config.WiFi_Creds[0].wifi_pw) - 1)
-            strcpy(ESP_WM_LITE_config.WiFi_Creds[0].wifi_pw, value.c_str());
-          else
-            strncpy(ESP_WM_LITE_config.WiFi_Creds[0].wifi_pw, value.c_str(), sizeof(ESP_WM_LITE_config.WiFi_Creds[0].wifi_pw) - 1);
-        }
-        else if (!id1_Updated && (key == String("id1")))
-        {
-          ESP_WML_LOGDEBUG(F("h:repl id1"));
-          id1_Updated = true;
-
-          number_items_Updated++;
-
-          if (strlen(value.c_str()) < sizeof(ESP_WM_LITE_config.WiFi_Creds[1].wifi_ssid) - 1)
-            strcpy(ESP_WM_LITE_config.WiFi_Creds[1].wifi_ssid, value.c_str());
-          else
-            strncpy(ESP_WM_LITE_config.WiFi_Creds[1].wifi_ssid, value.c_str(),
-                    sizeof(ESP_WM_LITE_config.WiFi_Creds[1].wifi_ssid) - 1);
-        }
-        else if (!pw1_Updated && (key == String("pw1")))
-        {
-          ESP_WML_LOGDEBUG(F("h:repl pw1"));
-          pw1_Updated = true;
-
-          number_items_Updated++;
-
-          if (strlen(value.c_str()) < sizeof(ESP_WM_LITE_config.WiFi_Creds[1].wifi_pw) - 1)
-            strcpy(ESP_WM_LITE_config.WiFi_Creds[1].wifi_pw, value.c_str());
-          else
-            strncpy(ESP_WM_LITE_config.WiFi_Creds[1].wifi_pw, value.c_str(), sizeof(ESP_WM_LITE_config.WiFi_Creds[1].wifi_pw) - 1);
-        }
-
-#if USING_BOARD_NAME
-        else if (!nm_Updated && (key == String("nm")))
-        {
-          ESP_WML_LOGDEBUG(F("h:repl nm"));
-          nm_Updated = true;
-
-          number_items_Updated++;
-
-          if (strlen(value.c_str()) < sizeof(ESP_WM_LITE_config.board_name) - 1)
-            strcpy(ESP_WM_LITE_config.board_name, value.c_str());
-          else
-            strncpy(ESP_WM_LITE_config.board_name, value.c_str(), sizeof(ESP_WM_LITE_config.board_name) - 1);
-        }
-
+      parseParam(request, FPSTR("nm"), ESP_WM_LITE_config.board_name, BOARD_NAME_MAX_LEN);
 #endif
 
 #if USE_DYNAMIC_PARAMETERS
-        else
-        {
-          for (uint16_t i = 0; i < NUM_MENU_ITEMS; i++)
-          {
-            if ( !menuItemUpdated[i] && (key == myMenuItems[i].id) )
-            {
-              ESP_WML_LOGDEBUG3(F("h:"), myMenuItems[i].id, F("="), value.c_str() );
-
-              menuItemUpdated[i] = true;
-
-              number_items_Updated++;
-
-              // Actual size of pdata is [maxlen + 1]
-              memset(myMenuItems[i].pdata, 0, myMenuItems[i].maxlen + 1);
-
-              if ((int) strlen(value.c_str()) < myMenuItems[i].maxlen)
-                strcpy(myMenuItems[i].pdata, value.c_str());
-              else
-                strncpy(myMenuItems[i].pdata, value.c_str(), myMenuItems[i].maxlen);
-
-              break;
-            }
-          }
-        }
-
+      for (uint16_t i = 0; i < NUM_MENU_ITEMS; i++)
+        parseParam(request, myMenuItems[i].id, myMenuItems[i].pdata, myMenuItems[i].maxlen);
 #endif
 
-        ESP_WML_LOGDEBUG1(F("h:items updated ="), number_items_Updated);
-        ESP_WML_LOGDEBUG3(F("h:key ="), key, ", value =", value);
+      request->send(204, FPSTR(WM_HTTP_HEAD_TEXT_HTML), "OK");
 
-        request->send(200, FPSTR(WM_HTTP_HEAD_TEXT_HTML), "OK");
-
-#if USE_DYNAMIC_PARAMETERS
-
-        if (number_items_Updated == NUM_CONFIGURABLE_ITEMS + NUM_MENU_ITEMS)
-#else
-        if (number_items_Updated == NUM_CONFIGURABLE_ITEMS)
-#endif
-        {
+      {
 #if USE_LITTLEFS
-          ESP_WML_LOGERROR1(F("h:Updating LittleFS:"), CONFIG_FILENAME);
+        ESP_WML_LOGERROR1(F("h:Updating LittleFS:"), CONFIG_FILENAME);
 #elif USE_SPIFFS
-          ESP_WML_LOGERROR1(F("h:Updating SPIFFS:"), CONFIG_FILENAME);
+        ESP_WML_LOGERROR1(F("h:Updating SPIFFS:"), CONFIG_FILENAME);
 #else
-          ESP_WML_LOGERROR(F("h:Updating EEPROM. Please wait for reset"));
+        ESP_WML_LOGERROR(F("h:Updating EEPROM. Please wait for reset"));
 #endif
 
-          saveAllConfigData();
+        saveAllConfigData();
 
-          // Done with CP, Clear CP Flag here if forced
-          if (isForcedConfigPortal)
-            clearForcedCP();
+        // Done with CP, Clear CP Flag here if forced
+        if (isForcedConfigPortal)
+          clearForcedCP();
 
-          ESP_WML_LOGERROR(F("h:Rst"));
+        ESP_WML_LOGERROR(F("h:Rst"));
 
-          // TO DO : what command to reset
-          // Delay then reset the board after save data
-          resetFunc();
-        }
-      }   // if (server)
+        // TO DO : what command to reset
+        // Delay then reset the board after save data
+        resetFunc();
+      }
     }
 
     //////////////////////////////////////////////
@@ -3113,7 +2780,6 @@ class ESPAsync_WiFiManager_Lite
         // reply to all requests with same HTML
         server->onNotFound([this](AsyncWebServerRequest * request)
         {
-          //// PATCH BEGIN ////
           String path = request->url();
           Serial.print(F("HANDLE REQUEST: "));
           Serial.println(path);
@@ -3127,10 +2793,16 @@ class ESPAsync_WiFiManager_Lite
             request->send(response);
             return;
           }
-          //// PATCH END ////
-          // handleRequest(request);
         });
-        
+
+        // config handler
+        server->on("/config", HTTP_GET, [this](AsyncWebServerRequest * request) {
+          getConfig(request);
+        });
+        server->on("/config", HTTP_POST, [this](AsyncWebServerRequest * request) {
+          updateConfig(request);
+        });
+
         server->begin();
       }
 
