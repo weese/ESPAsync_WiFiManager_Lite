@@ -381,9 +381,10 @@ typedef struct
 
 ///////////////////////////////////////////
 
-#define SSID_MAX_LEN      32
+#define SSID_MAX_LEN          32
 // WPA2 passwords can be up to 63 characters long.
-#define PASS_MAX_LEN      64
+#define PASS_MAX_LEN          64
+#define PASS_OBFUSCATE_STRING FPSTR("********")
 
 typedef struct
 {
@@ -446,12 +447,8 @@ const char WM_HTTP_CORS_ALLOW_ALL[]  PROGMEM = "*";
 uint32_t getChipID()
 {
   uint64_t chipId64 = 0;
-
   for (int i = 0; i < 6; i++)
-  {
     chipId64 |= ( ( (uint64_t) ESP.getEfuseMac() >> (40 - (i * 8)) ) & 0xff ) << (i * 8);
-  }
-
   return (uint32_t) (chipId64 & 0xFFFFFF);
 }
 
@@ -460,12 +457,8 @@ uint32_t getChipID()
 uint32_t getChipOUI()
 {
   uint64_t chipId64 = 0;
-
   for (int i = 0; i < 6; i++)
-  {
     chipId64 |= ( ( (uint64_t) ESP.getEfuseMac() >> (40 - (i * 8)) ) & 0xff ) << (i * 8);
-  }
-
   return (uint32_t) (chipId64 >> 24);
 }
 
@@ -491,31 +484,22 @@ class ESPAsync_WiFiManager_Lite
 {
   public:
 
-    ESPAsync_WiFiManager_Lite()
-    {
-
-    }
+    ESPAsync_WiFiManager_Lite() {}
 
     //////////////////////////////////////////
 
     ~ESPAsync_WiFiManager_Lite()
     {
       if (dnsServer)
-      {
         delete dnsServer;
-      }
 
       if (server)
       {
         delete server;
 
 #if SCAN_WIFI_NETWORKS
-
         if (indices)
-        {
           free(indices); //indices array no longer required so free memory
-        }
-
 #endif
       }
     }
@@ -527,8 +511,7 @@ class ESPAsync_WiFiManager_Lite
       ESP_WML_LOGINFO1(F("Con2:"), ssid);
       WiFi.mode(WIFI_STA);
 
-      if (static_IP != IPAddress(0, 0, 0, 0))
-      {
+      if (static_IP != IPAddress(0, 0, 0, 0)) {
         ESP_WML_LOGINFO(F("UseStatIP"));
         WiFi.config(static_IP, static_GW, static_SN, static_DNS1, static_DNS2);
       }
@@ -538,19 +521,13 @@ class ESPAsync_WiFiManager_Lite
       if (WiFi.status() != WL_CONNECTED)
       {
         if (pass && strlen(pass))
-        {
           WiFi.begin(ssid, pass);
-        }
         else
-        {
           WiFi.begin(ssid);
-        }
       }
 
       while (WiFi.status() != WL_CONNECTED)
-      {
         delay(500);
-      }
 
       ESP_WML_LOGINFO(F("Conn2WiFi"));
       displayWiFiData();
@@ -603,7 +580,7 @@ class ESPAsync_WiFiManager_Lite
 
     //////////////////////////////////////////
 
-    void begin(const char *iHostname = "")
+    void begin(const char *iHostname = "", wifi_mode_t mode = WIFI_STA)
     {
 #define TIMEOUT_CONNECT_WIFI      30000
 
@@ -639,8 +616,6 @@ class ESPAsync_WiFiManager_Lite
         ESP_WML_LOGDEBUG(F("======= Start Default Config Data ======="));
         displayConfigData(defaultConfig);
       }
-
-      WiFi.mode(WIFI_STA);
 
       if (iHostname[0] == 0)
       {
@@ -683,7 +658,7 @@ class ESPAsync_WiFiManager_Lite
           }
         }
 
-        if (connectMultiWiFi() == WL_CONNECTED)
+        if (connectMultiWiFi(mode) == WL_CONNECTED)
         {
           ESP_WML_LOGINFO(F("bg: WiFi OK."));
         }
@@ -837,9 +812,7 @@ class ESPAsync_WiFiManager_Lite
 
           // Fix ESP32-S2 issue with WebServer (https://github.com/espressif/arduino-esp32/issues/4348)
           if ( String(ARDUINO_BOARD) == "ESP32S2_DEV" )
-          {
             delay(1);
-          }
 
           return;
         }
@@ -858,9 +831,7 @@ class ESPAsync_WiFiManager_Lite
               ESP_WML_LOGINFO1(F("run: WiFi lost, configTimeout. Connect WiFi. Retry#:"), retryTimes);
             }
             else
-            {
               resetFunc();
-            }
           }
 
 #endif
@@ -1082,7 +1053,6 @@ class ESPAsync_WiFiManager_Lite
     String localIP()
     {
       ipAddress = IPAddressToString(WiFi.localIP());
-
       return ipAddress;
     }
 
@@ -1107,17 +1077,8 @@ class ESPAsync_WiFiManager_Lite
 
     //////////////////////////////////////////////
 
-    bool isConfigDataValid()
-    {
-      return hadConfigData;
-    }
-
-    //////////////////////////////////////////////
-
-    bool isConfigMode()
-    {
-      return configuration_mode;
-    }
+    bool isConfigDataValid() { return hadConfigData; }
+    bool isConfigMode() { return configuration_mode; }
 
     //////////////////////////////////////////////
 
@@ -1148,9 +1109,7 @@ class ESPAsync_WiFiManager_Lite
     void resetAndEnterConfigPortalPersistent()
     {
       persForcedConfigPortal = true;
-
       setForcedCP(true);
-
       // Delay then reset the ESP8266 after save data
       resetFunc();
     }
@@ -2457,7 +2416,7 @@ class ESPAsync_WiFiManager_Lite
 #endif
 #endif
 
-    uint8_t connectMultiWiFi()
+    uint8_t connectMultiWiFi(wifi_mode_t mode = WIFI_STA)
     {
 #if ESP32
       // For ESP32, this better be 0 to shorten the connect time.
@@ -2479,7 +2438,7 @@ class ESPAsync_WiFiManager_Lite
 
       ESP_WML_LOGINFO(F("Connecting MultiWifi..."));
 
-      WiFi.mode(WIFI_STA);
+      WiFi.mode(mode);
 
       setHostname();
 
@@ -2546,14 +2505,18 @@ class ESPAsync_WiFiManager_Lite
       json += '"';
     }
 
-    void jsonAppendKeyValue(String &json, String const &key, String value)
+    void jsonAppendKeyValue(String &json, String const &key, String value, const char *obfuscateValue = NULL)
     {
       jsonComma(json);
       json += '"';
       json += key;
       json += FPSTR("\":\"");
-      value.replace(FPSTR("\""), FPSTR("\\\""));
-      json += value;
+      if (obfuscateValue != NULL && !value.isEmpty())
+        json += obfuscateValue;
+      else {
+        value.replace(FPSTR("\""), FPSTR("\\\""));
+        json += value;
+      }
       json += '"';
     }
 
@@ -2578,9 +2541,9 @@ class ESPAsync_WiFiManager_Lite
 
     if (hadConfigData) {
       jsonAppendKeyValue(json, FPSTR("id"), ESP_WM_LITE_config.WiFi_Creds[0].wifi_ssid);
-      jsonAppendKeyValue(json, FPSTR("pw"), ESP_WM_LITE_config.WiFi_Creds[0].wifi_pw);
+      jsonAppendKeyValue(json, FPSTR("pw"), ESP_WM_LITE_config.WiFi_Creds[0].wifi_pw, PASS_OBFUSCATE_STRING);
       jsonAppendKeyValue(json, FPSTR("id1"), ESP_WM_LITE_config.WiFi_Creds[1].wifi_ssid);
-      jsonAppendKeyValue(json, FPSTR("pw1"), ESP_WM_LITE_config.WiFi_Creds[1].wifi_pw);
+      jsonAppendKeyValue(json, FPSTR("pw1"), ESP_WM_LITE_config.WiFi_Creds[1].wifi_pw, PASS_OBFUSCATE_STRING);
 #if USING_BOARD_NAME
       jsonAppendKeyValue(json, FPSTR("nm"), ESP_WM_LITE_config.board_name);
 #endif
@@ -2592,17 +2555,7 @@ class ESPAsync_WiFiManager_Lite
         jsonAppendKeyValue(json, myMenuItems[i].id, myMenuItems[i].pdata);
 
 #endif
-
-      if ( RFC952_hostname[0] != 0 )
-      {
-        // Replace only if Hostname is valid
-        jsonAppendKeyValue(json, FPSTR("ESP_ASYNC_WM_LITE"), RFC952_hostname);
-      }
-      else if ( ESP_WM_LITE_config.board_name[0] != 0 )
-      {
-        // Or replace only if board_name is valid.  Otherwise, keep intact
-        jsonAppendKeyValue(json, FPSTR("ESP_ASYNC_WM_LITE"), ESP_WM_LITE_config.board_name);
-      }
+      jsonAppendKeyValue(json, FPSTR("host"), RFC952_hostname);
       json += '}';
     }
 
@@ -2636,10 +2589,12 @@ class ESPAsync_WiFiManager_Lite
 #endif    // ARDUINO_ESP32S2_DEV
     }
 
-    void parseParam(AsyncWebServerRequest *request, const char *id, char *pdata, uint8_t maxlen)
+    void parseParam(AsyncWebServerRequest *request, const char *id, char *pdata, uint8_t maxlen, const char *obfuscateValue = NULL)
     {
       AsyncWebParameter *param = request->getParam(id, true);
       if (param != NULL) {
+        if (param->value() == obfuscateValue)
+          return;
         ESP_WML_LOGDEBUG3(F("h:"), id, F("="), param->value().c_str());
         strncpy(pdata, param->value().c_str(), maxlen - 1);
         pdata[maxlen - 1] = '\0';
@@ -2652,9 +2607,9 @@ class ESPAsync_WiFiManager_Lite
       strcpy(ESP_WM_LITE_config.header, ESP_WM_LITE_BOARD_TYPE);
 
       parseParam(request, FPSTR("id"), ESP_WM_LITE_config.WiFi_Creds[0].wifi_ssid, SSID_MAX_LEN);
-      parseParam(request, FPSTR("pw"), ESP_WM_LITE_config.WiFi_Creds[0].wifi_pw, PASS_MAX_LEN);
+      parseParam(request, FPSTR("pw"), ESP_WM_LITE_config.WiFi_Creds[0].wifi_pw, PASS_MAX_LEN, PASS_OBFUSCATE_STRING);
       parseParam(request, FPSTR("id1"), ESP_WM_LITE_config.WiFi_Creds[1].wifi_ssid, SSID_MAX_LEN);
-      parseParam(request, FPSTR("pw1"), ESP_WM_LITE_config.WiFi_Creds[1].wifi_pw, PASS_MAX_LEN);
+      parseParam(request, FPSTR("pw1"), ESP_WM_LITE_config.WiFi_Creds[1].wifi_pw, PASS_MAX_LEN, PASS_OBFUSCATE_STRING);
 #if USING_BOARD_NAME
       parseParam(request, FPSTR("nm"), ESP_WM_LITE_config.board_name, BOARD_NAME_MAX_LEN);
 #endif
@@ -2663,8 +2618,6 @@ class ESPAsync_WiFiManager_Lite
       for (uint16_t i = 0; i < NUM_MENU_ITEMS; i++)
         parseParam(request, myMenuItems[i].id, myMenuItems[i].pdata, myMenuItems[i].maxlen);
 #endif
-
-      request->send(204, FPSTR(WM_HTTP_HEAD_TEXT_HTML), "OK");
 
       {
 #if USE_LITTLEFS
@@ -2681,11 +2634,16 @@ class ESPAsync_WiFiManager_Lite
         if (isForcedConfigPortal)
           clearForcedCP();
 
-        ESP_WML_LOGERROR(F("h:Rst"));
+        this->begin("", WIFI_AP_STA);
 
-        // TO DO : what command to reset
-        // Delay then reset the board after save data
-        resetFunc();
+        request->send(204, FPSTR(WM_HTTP_HEAD_TEXT_HTML));
+
+        // TODO: uncomment
+        // ESP_WML_LOGERROR(F("h:Rst"));
+
+        // // TO DO : what command to reset
+        // // Delay then reset the board after save data
+        // resetFunc();
       }
     }
 
@@ -2722,13 +2680,11 @@ class ESPAsync_WiFiManager_Lite
       digitalWrite(LED_BUILTIN, LED_ON);
 #endif
 
-      if ( (portal_ssid == "") || portal_pass == "" )
+      if (portal_ssid.isEmpty() || portal_pass.isEmpty())
       {
         String chipID = String(ESP_getChipId(), HEX);
         chipID.toUpperCase();
-
         portal_ssid = "ESP_" + chipID;
-
         portal_pass = "MyESP_" + chipID;
       }
 
@@ -2742,10 +2698,8 @@ class ESPAsync_WiFiManager_Lite
 
       // Use random channel if WiFiAPChannel == 0
       if (WiFiAPChannel == 0)
-      {
         //channel = random(MAX_WIFI_CHANNEL) + 1;
         channel = (millis() % MAX_WIFI_CHANNEL) + 1;
-      }
       else
         channel = WiFiAPChannel;
 
@@ -2797,9 +2751,11 @@ class ESPAsync_WiFiManager_Lite
 
         // config handler
         server->on("/config", HTTP_GET, [this](AsyncWebServerRequest * request) {
+          Serial.print(F("GET CONFIG"));
           getConfig(request);
         });
         server->on("/config", HTTP_POST, [this](AsyncWebServerRequest * request) {
+          Serial.print(F("UPDATE CONFIG"));
           updateConfig(request);
         });
 
@@ -2896,26 +2852,18 @@ class ESPAsync_WiFiManager_Lite
 
         //sort networks
         for (int i = 0; i < n; i++)
-        {
           indices[i] = i;
-        }
 
         ESP_WML_LOGDEBUG(F("Sorting"));
 
         // RSSI SORT
         // old sort
         for (int i = 0; i < n; i++)
-        {
           for (int j = i + 1; j < n; j++)
-          {
             if (WiFi.RSSI(indices[j]) > WiFi.RSSI(indices[i]))
-            {
               //std::swap(indices[i], indices[j]);
               // Using locally defined swap()
               swap(&indices[i], &indices[j]);
-            }
-          }
-        }
 
         ESP_WML_LOGDEBUG(F("Removing Dup"));
 
@@ -2972,30 +2920,16 @@ class ESPAsync_WiFiManager_Lite
 
     //////////////////////////////////////////
 
-    int getRSSIasQuality(const int& RSSI)
+    int getRSSIasQuality(int RSSI)
     {
-      int quality = 0;
-
-      if (RSSI <= -100)
-      {
-        quality = 0;
-      }
-      else if (RSSI >= -50)
-      {
-        quality = 100;
-      }
-      else
-      {
-        quality = 2 * (RSSI + 100);
-      }
-
-      return quality;
+      if (RSSI <= -100) return 0;
+      if (RSSI >= -50)  return 100;
+      return 2 * (RSSI + 100);
     }
 
     //////////////////////////////////////////
 
 #endif
 };
-
 
 #endif    //ESPAsync_WiFiManager_Lite_h
