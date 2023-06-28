@@ -109,6 +109,8 @@
   #include <WiFi.h>
   #include <WiFiMulti.h>
   #include <ESPAsyncWebServer.h>
+  #include <HTTPClient.h>
+  #include <ArduinoJson.h>
 
   // To be sure no LittleFS for ESP32-C3 for core v1.0.6-
   #if ( defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 2) )
@@ -384,7 +386,10 @@ typedef struct
 #define SSID_MAX_LEN          32
 // WPA2 passwords can be up to 63 characters long.
 #define PASS_MAX_LEN          64
-#define PASS_OBFUSCATE_STRING FPSTR("********")
+
+const char PASS_OBFUSCATE_STRING[]        PROGMEM = "*******";
+const char FERMI_CLOUD_USERCODE_URL[]     PROGMEM = "http://fermicloud.spdns.de/auth/realms/fermi-cloud/protocol/openid-connect/auth/device";
+const char FERMI_CLOUD_USERCODE_PAYLOAD[] PROGMEM = "client_id=fermi-device";
 
 typedef struct
 {
@@ -1243,6 +1248,9 @@ class ESPAsync_WiFiManager_Lite
 
     String portal_ssid = "";
     String portal_pass = "";
+
+    String deviceCode = "";
+    String userCode = "";
 
     IPAddress static_IP   = IPAddress(0, 0, 0, 0);
     IPAddress static_GW   = IPAddress(0, 0, 0, 0);
@@ -2488,6 +2496,26 @@ class ESPAsync_WiFiManager_Lite
 
     //////////////////////////////////////////////
 
+    void fetchUserCode() {
+      HTTPClient http;
+      http.begin(FERMI_CLOUD_USERCODE_URL);
+      http.addHeader("Content-Type", "application/x-www-form-urlencoded", false, false);
+      int httpCode = http.POST((uint8_t *)FERMI_CLOUD_USERCODE_PAYLOAD, sizeof(FERMI_CLOUD_USERCODE_PAYLOAD));
+      if (httpCode == 200) {
+          StaticJsonDocument<200> filter;
+          filter["device_code"] = true;
+          filter["user_code"] = true;
+          StaticJsonDocument<200> doc;
+          DeserializationError error = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
+          if (!error) {
+              deviceCode = doc["device_code"].as<String>();
+              userCode = doc["user_code"].as<String>();
+              ESP_WML_LOGINFO1(F("s:User code = "), userCode.c_str());
+          }
+      }
+      http.end();
+    }
+
     void jsonComma(String &json) {
       if (json.length()) {
         char lastChar = json[json.length() - 1];
@@ -2635,6 +2663,9 @@ class ESPAsync_WiFiManager_Lite
           clearForcedCP();
 
         this->begin("", WIFI_AP_STA);
+        if (WiFi.status() == WL_CONNECTED) {
+          fetchUserCode();
+        }
 
         request->send(204, FPSTR(WM_HTTP_HEAD_TEXT_HTML));
 
