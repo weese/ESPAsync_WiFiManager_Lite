@@ -323,7 +323,7 @@ class WiFiManager
           } else
             ESP_WML_LOGWARN3(F("bg: Ignore invalid WiFi PWD : index="), i, F(", PWD="), ESP_WM_LITE_config.wifiCreds[i].pw);
 
-        if (connectMultiWiFi(mode) == WL_CONNECTED) {
+        if (connectMultiWiFi() == WL_CONNECTED) {
           ESP_WML_LOGINFO(F("bg: WiFi OK."));
         } else {
           ESP_WML_LOGINFO(F("bg: Fail2connect WiFi"));
@@ -897,7 +897,7 @@ class WiFiManager
 #endif
 #endif
 
-    uint8_t connectMultiWiFi(wifi_mode_t mode = WIFI_STA)
+    uint8_t connectMultiWiFi()
     {
       // For ESP32, this better be 0 to shorten the connect time.
       // For ESP32-S2/C3, must be > 500
@@ -912,9 +912,9 @@ class WiFiManager
 
       uint8_t status;
 
-      ESP_WML_LOGINFO1(F("Connecting MultiWifi..."), mode);
+      ESP_WML_LOGINFO(F("Connecting MultiWifi..."));
 
-      WiFi.mode(mode);
+      WiFi.mode(WIFI_STA);
 
       setHostname();
 
@@ -1115,12 +1115,13 @@ class WiFiManager
       digitalWrite(LED_BUILTIN, HIGH);
 #endif
 
-      if (portal_ssid.isEmpty() || portal_pass.isEmpty())
+      if (portal_ssid.isEmpty())
       {
         String chipID = String(ESP_getChipId(), HEX);
         chipID.toUpperCase();
         portal_ssid = "ESP_" + chipID;
-        portal_pass = "MyESP_" + chipID;
+        // if (portal_pass.isEmpty())
+        //   portal_pass = "MyESP_" + chipID;
       }
 
       WiFi.mode(WIFI_AP_STA);
@@ -1142,7 +1143,7 @@ class WiFiManager
       // ESP32 or ESP8266is core v3.0.0- is OK either way
       WiFi.softAPConfig(portal_apIP, portal_apIP, IPAddress(255, 255, 255, 0));
 
-      WiFi.softAP(portal_ssid.c_str(), portal_pass.c_str(), channel);
+      WiFi.softAP(portal_ssid.c_str(), portal_pass.isEmpty() ? NULL : portal_pass.c_str(), channel);
 
       ESP_WML_LOGERROR3(F("\nstConf:SSID="), portal_ssid, F(",PW="), portal_pass);
       ESP_WML_LOGERROR3(F("IP="), portal_apIP.toString(), ",ch=", channel);
@@ -1151,8 +1152,7 @@ class WiFiManager
 
       if (!server)
       {
-        ESP_WML_LOGERROR1(F("Start web server "), WiFi.softAPIP().toString());
-        server = new AsyncWebServer(WiFi.softAPIP(), HTTP_PORT);
+        server = new AsyncWebServer(HTTP_PORT);
       }
 
       if (!dnsServer)
@@ -1165,8 +1165,7 @@ class WiFiManager
       {
         // CaptivePortal
         // if DNSServer is started with "*" for domain name, it will reply with provided IP to all DNS requests
-        ESP_WML_LOGERROR1(F("Start DNS server "), WiFi.softAPIP().toString());
-        dnsServer->start(WiFi.softAPIP(), DNS_PORT, "*", portal_apIP);
+        dnsServer->start(DNS_PORT, "*", portal_apIP);
         
         // reply to all requests with same HTML
         server->onNotFound([this](AsyncWebServerRequest * request)
