@@ -171,6 +171,8 @@ MultiResetDetector* rd;
 const char PASS_OBFUSCATE_STRING[]        PROGMEM = "*******";
 const char FERMI_CLOUD_USERCODE_URL[]     PROGMEM = "http://fermicloud.spdns.de/auth/realms/fermi-cloud/protocol/openid-connect/auth/device";
 const char FERMI_CLOUD_USERCODE_PAYLOAD[] PROGMEM = "client_id=fermi-device";
+const char FERMI_CLOUD_TOKEN_URL[]        PROGMEM = "http://fermicloud.spdns.de/auth/realms/fermi-cloud/protocol/openid-connect/token";
+const char FERMI_CLOUD_TOKEN_PAYLOAD[]    PROGMEM = "client_id=fermi-device&scope=openid&grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=";
 
 #define MIN_WIFI_CHANNEL        1
 #define MAX_WIFI_CHANNEL        11    // Channel 13 is flaky, because of bad number 13 ;-)
@@ -180,7 +182,8 @@ const char FERMI_CLOUD_USERCODE_PAYLOAD[] PROGMEM = "client_id=fermi-device";
 extern bool LOAD_DEFAULT_CONFIG_DATA;
 #define WM_CONFIG_PORTAL_FILENAME ("/wm_cp.dat")
 #define WM_CONFIG_PORTAL_FILENAME_BACKUP ("/wm_cp.bak")
-
+#define WM_TOKEN_FILENAME "/wm_token.dat"
+#define WM_TOKEN_FILENAME_BACKUP "/wm_token.bak"
 
 //////////////////////////////////////////
 
@@ -197,6 +200,14 @@ const char WM_HTTP_NO_CACHE[]        PROGMEM = "no-cache";
 const char WM_HTTP_EXPIRES[]         PROGMEM = "Expires";
 const char WM_HTTP_CORS[]            PROGMEM = "Access-Control-Allow-Origin";
 const char WM_HTTP_CORS_ALLOW_ALL[]  PROGMEM = "*";
+
+enum WMState {
+  WM_READY = 0,
+  WM_WIFI_CONFIG,
+  WM_CONNECTING,
+  WM_FETCH_CODE,
+  WM_FETCH_TOKEN,
+};
 
 //////////////////////////////////////////
 
@@ -240,12 +251,12 @@ class WiFiManager
 
     //////////////////////////////////////////
 
-    void begin(const char* ssid,
-               const char* pass )
-    {
-      ESP_WML_LOGERROR(F("conW"));
-      connectWiFi(ssid, pass);
-    }
+    // void begin(const char* ssid,
+    //            const char* pass )
+    // {
+    //   ESP_WML_LOGERROR(F("conW"));
+    //   connectWiFi(ssid, pass);
+    // }
 
     //////////////////////////////////////////
 
@@ -315,11 +326,14 @@ class WiFiManager
 
         ESP_WML_LOGDEBUG(noConfigPortal ? F("bg: noConfigPortal = true") : F("bg: noConfigPortal = false"));
 
+        WiFi.mode(mode);
         for (uint16_t i = 0; i < WM_NUM_WIFI_CREDENTIALS; i++)
           if (ESP_WM_LITE_config.wifiConfigValidPart(i)) {
             ESP_WML_LOGDEBUG5(F("bg: addAP : index="), i, F(", SSID="), ESP_WM_LITE_config.wifiCreds[i].ssid, F(", PWD="),
                               ESP_WM_LITE_config.wifiCreds[i].pw);
-            wifiMulti.addAP(ESP_WM_LITE_config.wifiCreds[i].ssid, ESP_WM_LITE_config.wifiCreds[i].pw);
+            WiFi.begin(ESP_WM_LITE_config.wifiCreds[i].ssid, ESP_WM_LITE_config.wifiCreds[i].pw);
+            break;
+            // wifiMulti.addAP(ESP_WM_LITE_config.wifiCreds[i].ssid, ESP_WM_LITE_config.wifiCreds[i].pw);
           } else
             ESP_WML_LOGWARN3(F("bg: Ignore invalid WiFi PWD : index="), i, F(", PWD="), ESP_WM_LITE_config.wifiCreds[i].pw);
 
@@ -330,6 +344,7 @@ class WiFiManager
           // failed to connect to WiFi, will start configuration mode
           startConfigurationMode();
         }
+
         startConfigurationMode();
       } else {
         ESP_WML_LOGDEBUG(isForcedConfigPortal ? F("bg: isForcedConfigPortal = true") : F("bg: isForcedConfigPortal = false"));
@@ -404,7 +419,6 @@ class WiFiManager
     void run()
     {
       static int retryTimes = 0;
-      static bool wifiDisconnectedOnce = false;
 
       // Lost connection in running. Give chance to reconfig.
       // Check WiFi status every 5s and update status
@@ -422,21 +436,24 @@ class WiFiManager
       // consider the next reset as a double reset.
       rd->loop();
 
-      if ( !configuration_mode && (curMillis > checkstatus_timeout) )
+      if (curMillis > checkstatus_timeout)
       {
-        if (WiFi.status() == WL_CONNECTED)
-          wifi_connected = true;
-        else
-        {
-          if (wifiDisconnectedOnce) {
-            wifi_connected = false;
-            ESP_WML_LOGERROR(F("r:Check&WLost"));
-          }
-          wifiDisconnectedOnce = !wifiDisconnectedOnce;
+        switch (state) {
+          case WM_CONNECTING:
+            if (WiFi.status() == WL_CONNECTED)
+              state = hasToken() ? WM_READY : WM_FETCH_CODE;
+            break;
+          case WM_FETCH_CODE:
+            if (fetchUserCode())
+              state = WM_FETCH_TOKEN;
+            break;
+          case WM_FETCH_TOKEN:
+            if (fetchAccessToken())
+              state = WM_READY;
         }
-
         checkstatus_timeout = curMillis + WIFI_STATUS_CHECK_INTERVAL;
       }
+      return;
 
       // Lost connection in running. Give chance to reconfig.
       if ( WiFi.status() != WL_CONNECTED )
@@ -505,29 +522,30 @@ class WiFiManager
         //ESP_WML_LOGINFO(F("run: Lost connection => configMode"));
         //startConfigurationMode();
       }
-      else if (configuration_mode)
-      {
-        // WiFi is connected and we are in configuration_mode
-        configuration_mode = false;
-        ESP_WML_LOGINFO(F("run: got WiFi back"));
+      // else
+//       if (configuration_mode)
+//       {
+//         // WiFi is connected and we are in configuration_mode
+//         configuration_mode = false;
+//         ESP_WML_LOGINFO(F("run: got WiFi back"));
 
-#if USE_LED_BUILTIN
-        // turn the LED_BUILTIN OFF to tell us we exit configuration mode.
-        digitalWrite(LED_BUILTIN, LOW);
-#endif
+// #if USE_LED_BUILTIN
+//         // turn the LED_BUILTIN OFF to tell us we exit configuration mode.
+//         digitalWrite(LED_BUILTIN, LOW);
+// #endif
 
-        if (dnsServer) {
-          dnsServer->stop();
-          delete dnsServer;
-          dnsServer = nullptr;
-        }
+//         if (dnsServer) {
+//           dnsServer->stop();
+//           delete dnsServer;
+//           dnsServer = nullptr;
+//         }
 
-        if (server) {
-          server->end();
-          delete server;
-          server = nullptr;
-        }
-      }
+//         if (server) {
+//           server->end();
+//           delete server;
+//           server = nullptr;
+//         }
+//       }
     }
 
     //////////////////////////////////////////////
@@ -538,7 +556,6 @@ class WiFiManager
     String localIP()          { return WiFi.localIP().toString(); }
 
     void setMinimumSignalQuality(const int& quality) { _minimumQuality = quality; }
-    void setRemoveDuplicateAPs(const bool& removeDuplicates) { _removeDuplicateAPs = removeDuplicates; }
     void setHostname() { if (RFC952_hostname[0] != 0) WiFi.setHostname(RFC952_hostname); }
     void setConfigPortalIP(const IPAddress& portalIP = IPAddress(192, 168, 4, 1)) { portal_apIP = portalIP; }
     bool getConfigData()      { return ESP_WM_LITE_config.load(); }
@@ -690,7 +707,7 @@ class WiFiManager
   private:
     String ipAddress = "0.0.0.0";
 
-    WiFiMulti wifiMulti;
+    // WiFiMulti wifiMulti;
     AsyncWebServer *server = nullptr;
     AsyncDNSServer *dnsServer = nullptr;
 
@@ -708,7 +725,6 @@ class WiFiManager
     uint16_t totalDataSize = 0;
 
     String macAddress = "";
-    bool wifi_connected = false;
 
     IPAddress portal_apIP = IPAddress(192, 168, 4, 1);
     int WiFiAPChannel = 10;
@@ -716,6 +732,7 @@ class WiFiManager
     String portal_ssid = "";
     String portal_pass = "";
 
+    WMState state = WM_READY;
     String deviceCode = "";
     String userCode = "";
 
@@ -914,12 +931,12 @@ class WiFiManager
 
       ESP_WML_LOGINFO(F("Connecting MultiWifi..."));
 
-      WiFi.mode(WIFI_STA);
+      // WiFi.mode(WIFI_STA);
 
       setHostname();
 
       int i = 0;
-      status = wifiMulti.run();
+      // status = wifiMulti.run();
       delay(WIFI_MULTI_1ST_CONNECT_WAITING_MS);
 
       uint8_t numWiFiReconTries = 0;
@@ -958,15 +975,16 @@ class WiFiManager
 
     //////////////////////////////////////////////
 
-    void fetchUserCode() {
+    bool fetchUserCode() {
       HTTPClient http;
+      bool result = false;
+
       http.setConnectTimeout(500);
       http.setTimeout(500);
-      // http.begin(FERMI_CLOUD_USERCODE_URL);
-      http.begin("http://192.168.1.1/");
-      // http.addHeader("Content-Type", "application/x-www-form-urlencoded", false, false);
-      // int httpCode = http.POST((uint8_t *)FERMI_CLOUD_USERCODE_PAYLOAD, sizeof(FERMI_CLOUD_USERCODE_PAYLOAD));
-      int httpCode = http.GET();
+      http.begin(FERMI_CLOUD_USERCODE_URL);
+      http.addHeader("Content-Type", "application/x-www-form-urlencoded", false, false);
+
+      int httpCode = http.POST(FERMI_CLOUD_USERCODE_PAYLOAD);
       ESP_WML_LOGINFO1(F("s:DNS IP = "), WiFi.dnsIP(0).toString());
       ESP_WML_LOGINFO1(F("s:Gateway IP = "), WiFi.gatewayIP().toString());
       ESP_WML_LOGINFO1(F("s:Status code = "), httpCode);
@@ -977,12 +995,72 @@ class WiFiManager
           StaticJsonDocument<200> doc;
           DeserializationError error = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
           if (!error) {
-              deviceCode = doc["device_code"].as<String>();
-              userCode = doc["user_code"].as<String>();
+              deviceCode = doc["device_code"].as<const char*>();
+              userCode = doc["user_code"].as<const char*>();
               ESP_WML_LOGINFO1(F("s:User code = "), userCode.c_str());
           }
       }
       http.end();
+      return result;
+    }
+
+    void saveAs(String const &data, char const *filename)
+    {
+        ESP_WML_LOGINFO1(F("Save file %s... "), filename);
+        File file = FileFS.open(filename, "w");
+        if (file)
+        {
+            file.write((uint8_t *)data.c_str(), data.length());
+            file.close();
+            ESP_WML_LOGINFO(F("OK"));
+        }
+        else
+            ESP_WML_LOGINFO(F("failed"));
+    }
+
+    bool hasToken() {
+        return FileFS.exists(WM_TOKEN_FILENAME);
+    }
+
+    void saveToken(String const &token)
+    {
+        saveAs(token, WM_TOKEN_FILENAME);
+        saveAs(token, WM_TOKEN_FILENAME_BACKUP);
+    }
+    
+    bool fetchAccessToken() {
+      HTTPClient http;
+      bool result = false;
+      http.setConnectTimeout(500);
+      http.setTimeout(500);
+      http.begin(FERMI_CLOUD_TOKEN_URL);
+      http.addHeader("Content-Type", "application/x-www-form-urlencoded", false, false);
+      // int httpCode = http.POST((uint8_t *)FERMI_CLOUD_USERCODE_PAYLOAD, sizeof(FERMI_CLOUD_USERCODE_PAYLOAD) - 1);
+      int httpCode = http.POST(String(FERMI_CLOUD_TOKEN_PAYLOAD) + deviceCode);
+      ESP_WML_LOGINFO1(F("s:Status code = "), httpCode);
+      StaticJsonDocument<200> filter;
+      StaticJsonDocument<1000> doc;
+      if (httpCode == 200) {
+          filter["refresh_token"] = true;
+          DeserializationError error = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
+          if (!error) {
+              String refreshToken = doc["refresh_token"].as<const char*>();
+              ESP_WML_LOGINFO1(F("s:Refresh token = "), refreshToken.c_str());
+              saveToken(refreshToken);
+              result = true;
+          }
+      } else if (httpCode == 400) {
+          filter["error"] = true;
+          DeserializationError error = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
+          if (!error) {
+              if (strcmp(doc["error"].as<const char*>(), "expired_token") == 0) {
+                ESP_WML_LOGINFO(F("s:Token expired, request new one"));
+                fetchUserCode();
+              }
+          }
+      }
+      http.end();
+      return result;
     }
 
     void createConfigJson(String& json)
@@ -1142,7 +1220,6 @@ class WiFiManager
       // softAPConfig() must be put before softAP() for ESP8266 core v3.0.0+ to work.
       // ESP32 or ESP8266is core v3.0.0- is OK either way
       WiFi.softAPConfig(portal_apIP, portal_apIP, IPAddress(255, 255, 255, 0));
-
       WiFi.softAP(portal_ssid.c_str(), portal_pass.isEmpty() ? NULL : portal_pass.c_str(), channel);
 
       ESP_WML_LOGERROR3(F("\nstConf:SSID="), portal_ssid, F(",PW="), portal_pass);
@@ -1215,9 +1292,7 @@ class WiFiManager
       configuration_mode = true;
     }
 
-    int           _paramsCount            = 0;
     int           _minimumQuality         = INT_MIN;
-    bool          _removeDuplicateAPs     = true;
 
     //Scan for WiFiNetworks in range and sort by signal strength
     //space for indices array allocated on the heap and should be freed when no longer required
@@ -1259,19 +1334,17 @@ class WiFiManager
       ESP_WML_LOGDEBUG(F("Removing Dup"));
 
       // remove duplicates ( must be RSSI sorted )
-      if (_removeDuplicateAPs) {
-        String cssid;
+      String cssid;
 
-        for (int i = 0; i < n; i++) {
-          if (indices[i] == -1) continue;
-          cssid = WiFi.SSID(indices[i]);
+      for (int i = 0; i < n; i++) {
+        if (indices[i] == -1) continue;
+        cssid = WiFi.SSID(indices[i]);
 
-          for (int j = i + 1; j < n; j++)
-            if (cssid == WiFi.SSID(indices[j])) {
-              ESP_WML_LOGDEBUG1("DUP AP:", WiFi.SSID(indices[j]));
-              indices[j] = -1; // set dup aps to index -1
-            }
-        }
+        for (int j = i + 1; j < n; j++)
+          if (cssid == WiFi.SSID(indices[j])) {
+            ESP_WML_LOGDEBUG1("DUP AP:", WiFi.SSID(indices[j]));
+            indices[j] = -1; // set dup aps to index -1
+          }
       }
 
       for (int i = 0; i < n; i++) {
