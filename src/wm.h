@@ -550,7 +550,6 @@ class WiFiManager
 
     //////////////////////////////////////////////
 
-    bool getWiFiStatus()      { return wifi_connected; }
     bool isConfigDataValid()  { return hadConfigData; }
     bool isConfigMode()       { return configuration_mode; }
     String localIP()          { return WiFi.localIP().toString(); }
@@ -1120,7 +1119,7 @@ class WiFiManager
 #endif    // ARDUINO_ESP32S2_DEV
     }
 
-    void parseParam(AsyncWebServerRequest *request, const char *id, char *pdata, uint8_t maxlen, const char *obfuscateValue = NULL)
+    void parseParam(AsyncWebServerRequest *request, const __FlashStringHelper *id, char *pdata, uint8_t maxlen, const char *obfuscateValue = NULL)
     {
       AsyncWebParameter *param = request->getParam(id, true);
       if (param != NULL) {
