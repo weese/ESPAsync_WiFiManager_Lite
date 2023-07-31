@@ -5,6 +5,24 @@
 
 #include <SPIFFS.h>
 
+///////////////////////////////////////////
+
+#ifndef WM_VERSION
+  #define WM_VERSION_MAJOR  1
+  #define WM_VERSION_MINOR  10
+  #define WM_VERSION_PATCH  5
+
+  #define WM_VERSION        "WifiManager v" WM_VERSION_MAJOR "." WM_VERSION_MINOR "." WM_VERSION_PATCH
+  #define WM_VERSION_INT    1010005
+#endif
+
+//////////////////////////////////////////////
+
+class WMByteArray : public String {
+public:
+    inline void setLength(int l) { String::setLen(l); }
+};
+
 //////////////////////////////////////////////
 
 void resetFunc()
@@ -15,20 +33,22 @@ void resetFunc()
 
 //////////////////////////////////////////
 
-uint32_t getChipID()
+uint64_t _getChipID64()
 {
   uint64_t chipId64 = 0;
   for (int i = 0; i < 6; i++)
     chipId64 |= (((uint64_t)ESP.getEfuseMac() >> (40 - (i * 8))) & 0xff) << (i * 8);
-  return (uint32_t)(chipId64 & 0xFFFFFF);
+  return chipId64;
 }
 
-uint32_t getChipOUI()
+inline uint32_t getChipID()
 {
-  uint64_t chipId64 = 0;
-  for (int i = 0; i < 6; i++)
-    chipId64 |= (((uint64_t)ESP.getEfuseMac() >> (40 - (i * 8))) & 0xff) << (i * 8);
-  return (uint32_t)(chipId64 >> 24);
+  return (uint32_t)(_getChipID64() & 0xFFFFFF);
+}
+
+inline uint32_t getChipOUI()
+{
+  return (uint32_t)(_getChipID64() >> 24);
 }
 
 //////////////////////////////////////////

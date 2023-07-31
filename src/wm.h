@@ -1,42 +1,15 @@
 /****************************************************************************************************************************
-  WiFiManager.h
+  WifiManager.h
   For ESP32 boards
 
-  WiFiManager (https://github.com/khoih-prog/WiFiManager) is a library
-  for the ESP32 boards to enable store Credentials in EEPROM/SPIFFS/LittleFS for easy
-  configuration/reconfiguration and autoconnect/autoreconnect of WiFi and other services without Hardcoding.
+  Based on the ESPAsync_WiFiManager_Lite library by Khoi Hoang https://github.com/khoih-prog/ESPAsync_WiFiManager_Lite
 
-  Built by Khoi Hoang https://github.com/khoih-prog/WiFiManager
-  Licensed under MIT license
-
-  Version: 1.10.5
-
-  Version Modified By   Date        Comments
-  ------- -----------  ----------   -----------
-  1.0.0   K Hoang      09/02/2021  Initial coding for ESP32/ESP8266
-  1.1.0   K Hoang      12/02/2021  Add support to new ESP32-S2
-  1.2.0   K Hoang      22/02/2021  Add customs HTML header feature. Fix bug.
-  1.3.0   K Hoang      12/04/2021  Fix invalid "blank" Config Data treated as Valid. Fix EEPROM_SIZE bug
-  1.4.0   K Hoang      21/04/2021  Add support to new ESP32-C3 using SPIFFS or EEPROM
-  1.5.0   Michael H    24/04/2021  Enable scan of WiFi networks for selection in Configuration Portal
-  1.5.1   K Hoang      10/10/2021  Update `platform.ini` and `library.json`
-  1.6.0   K Hoang      26/11/2021  Auto detect ESP32 core and use either built-in LittleFS or LITTLEFS library. Fix bug.
-  1.7.0   K Hoang      09/01/2022  Fix the blocking issue in loop() with configurable WIFI_RECON_INTERVAL
-  1.8.0   K Hoang      10/02/2022  Add support to new ESP32-S3
-  1.8.1   K Hoang      11/02/2022  Add LittleFS support to ESP32-C3. Use core LittleFS instead of Lorol's LITTLEFS for v2.0.0+
-  1.8.2   K Hoang      21/02/2022  Optional Board_Name in Menu. Optimize code by using passing by reference
-  1.9.0   K Hoang      09/09/2022  Fix ESP32 chipID and add getChipOUI()
-  1.9.1   K Hoang      28/12/2022  Add Captive Portal using AsyncDNSServer
-  1.10.1  K Hoang      12/01/2023  Added public methods to load and save dynamic data. Bump up to v1.10.1
-  1.10.2  K Hoang      15/01/2023  Add Config Portal scaling support to mobile devices
-  1.10.3  K Hoang      19/01/2023  Fix compiler error if EEPROM is used
-  1.10.5  K Hoang      29/01/2023  Using PROGMEM for strings. Sync with ESP_WiFiManager_Lite v1.10.5
  *****************************************************************************************************************************/
 
 #pragma once
 
-#ifndef ESPAsync_WiFiManager_Lite_h
-#define ESPAsync_WiFiManager_Lite_h
+#ifndef wm_h_
+#define wm_h_
 
 ///////////////////////////////////////////
 
@@ -64,29 +37,15 @@
 
 ///////////////////////////////////////////
 
-#ifndef ESP_ASYNC_WIFI_MANAGER_LITE_VERSION
-  #define ESP_ASYNC_WIFI_MANAGER_LITE_VERSION             "WiFiManager v1.10.5"
-
-  #define ESP_ASYNC_WIFI_MANAGER_LITE_VERSION_MAJOR       1
-  #define ESP_ASYNC_WIFI_MANAGER_LITE_VERSION_MINOR       10
-  #define ESP_ASYNC_WIFI_MANAGER_LITE_VERSION_PATCH       5
-
-  #define ESP_ASYNC_WIFI_MANAGER_LITE_VERSION_INT         1010005
-#endif
-
-///////////////////////////////////////////
-
 #include <WiFi.h>
-#include <WiFiMulti.h>
 #include <ESPAsyncWebServer.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 
 ///////////////////////////////////////////
 
-#define HTTP_PORT     80
-#define DNS_PORT      53
-#define FORMAT_FS     false
+#define WM_HTTP_PORT     80
+#define WM_DNS_PORT      53
 
 ///////////////////////////////////////////
 
@@ -96,26 +55,12 @@
 #undef max
 #include <algorithm>
 
-//KH, for ESP32
 #include <esp_wifi.h>
-
-uint32_t getChipID();
-uint32_t getChipOUI();
-
-#if defined(ESP_getChipId)
-  #undef ESP_getChipId
-#endif
-
-#if defined(ESP_getChipOUI)
-  #undef ESP_getChipOUI
-#endif
-
-#define ESP_getChipId()   getChipID()
-#define ESP_getChipOUI()  getChipOUI()
-
 #include "wm_debug.h"
 #include "wm_helpers.h"
 #include "wm_config.h"
+#include "wm_wifi.h"
+#include "wm_fermion.h"
 
 //////////////////////////////////////////////
 
@@ -182,8 +127,6 @@ const char FERMI_CLOUD_TOKEN_PAYLOAD[]    PROGMEM = "client_id=fermi-device&scop
 extern bool LOAD_DEFAULT_CONFIG_DATA;
 #define WM_CONFIG_PORTAL_FILENAME ("/wm_cp.dat")
 #define WM_CONFIG_PORTAL_FILENAME_BACKUP ("/wm_cp.bak")
-#define WM_TOKEN_FILENAME "/wm_token.dat"
-#define WM_TOKEN_FILENAME_BACKUP "/wm_token.bak"
 
 //////////////////////////////////////////
 
@@ -220,43 +163,9 @@ class WiFiManager
     ~WiFiManager() {
       delete dnsServer;
       delete server;
+      delete events;
       free(indices);
     }
-
-    void connectWiFi(const char* ssid, const char* pass) {
-      ESP_WML_LOGINFO1(F("Con2:"), ssid);
-      WiFi.mode(WIFI_STA);
-
-      if (static_IP != IPAddress(0, 0, 0, 0)) {
-        ESP_WML_LOGINFO(F("UseStatIP"));
-        WiFi.config(static_IP, static_GW, static_SN, static_DNS1, static_DNS2);
-      }
-
-      setHostname();
-
-      if (WiFi.status() != WL_CONNECTED)
-      {
-        if (pass && strlen(pass))
-          WiFi.begin(ssid, pass);
-        else
-          WiFi.begin(ssid);
-      }
-
-      while (WiFi.status() != WL_CONNECTED)
-        delay(500);
-
-      ESP_WML_LOGINFO(F("Conn2WiFi"));
-      displayWiFiData();
-    }
-
-    //////////////////////////////////////////
-
-    // void begin(const char* ssid,
-    //            const char* pass )
-    // {
-    //   ESP_WML_LOGERROR(F("conW"));
-    //   connectWiFi(ssid, pass);
-    // }
 
     //////////////////////////////////////////
 
@@ -279,7 +188,24 @@ class WiFiManager
 
     //////////////////////////////////////////
 
-    void begin(const char *iHostname = "", wifi_mode_t mode = WIFI_STA)
+    String accessToken;
+
+    bool cloudConnect() {
+      // 1. Try to load Wifi config
+      if (!config.load()) return false;
+
+      // 2. Try to load access token
+      if (!fileExist(WM_TOKEN_FILENAME) &&
+          !fileExist(WM_TOKEN_FILENAME_BACKUP)) return false;
+      
+      // 3. Connect Wifi
+      if (!wmConnectWifi(wifiMulti, config)) return false;
+      
+      // 3. Connect to MQTT server
+      if (!Particle.connect()) return false;
+    }
+
+    void begin(wifi_mode_t mode = WIFI_STA)
     {
 #define TIMEOUT_CONNECT_WIFI      30000
 
@@ -304,48 +230,20 @@ class WiFiManager
         defaultConfig.print();
       }
 
-      if (iHostname[0] == 0) {
-        String _hostname = "ESP_" + String(ESP_getChipId(), HEX);
-        _hostname.toUpperCase();
-        getRFC952_hostname(_hostname.c_str());
-      }
-      else
-        // Prepare and store the hostname only not NULL
-        getRFC952_hostname(iHostname);
-
-      ESP_WML_LOGINFO1(F("Hostname="), RFC952_hostname);
-
-      hadConfigData = getConfigData();
+      wmSetHostname();
+      hadConfigData = loadConfigData();
 
       isForcedConfigPortal = isForcedCP();
 
-      //  noConfigPortal when getConfigData() OK and no MRD/DRD'ed
+      //  noConfigPortal when loadConfigData() OK and no MRD/DRD'ed
       if (hadConfigData && noConfigPortal && (!isForcedConfigPortal) )
       {
         hadConfigData = true;
 
         ESP_WML_LOGDEBUG(noConfigPortal ? F("bg: noConfigPortal = true") : F("bg: noConfigPortal = false"));
 
-        WiFi.mode(mode);
-        for (uint16_t i = 0; i < WM_NUM_WIFI_CREDENTIALS; i++)
-          if (ESP_WM_LITE_config.wifiConfigValidPart(i)) {
-            ESP_WML_LOGDEBUG5(F("bg: addAP : index="), i, F(", SSID="), ESP_WM_LITE_config.wifiCreds[i].ssid, F(", PWD="),
-                              ESP_WM_LITE_config.wifiCreds[i].pw);
-            WiFi.begin(ESP_WM_LITE_config.wifiCreds[i].ssid, ESP_WM_LITE_config.wifiCreds[i].pw);
-            break;
-            // wifiMulti.addAP(ESP_WM_LITE_config.wifiCreds[i].ssid, ESP_WM_LITE_config.wifiCreds[i].pw);
-          } else
-            ESP_WML_LOGWARN3(F("bg: Ignore invalid WiFi PWD : index="), i, F(", PWD="), ESP_WM_LITE_config.wifiCreds[i].pw);
-
-        if (connectMultiWiFi() == WL_CONNECTED) {
-          ESP_WML_LOGINFO(F("bg: WiFi OK."));
-        } else {
-          ESP_WML_LOGINFO(F("bg: Fail2connect WiFi"));
-          // failed to connect to WiFi, will start configuration mode
-          startConfigurationMode();
-        }
-
-        startConfigurationMode();
+        if (!wmConnectWifi(wifiMulti, config, mode))
+          startConfigurationMode(); // failed to connect to WiFi, will start configuration mode
       } else {
         ESP_WML_LOGDEBUG(isForcedConfigPortal ? F("bg: isForcedConfigPortal = true") : F("bg: isForcedConfigPortal = false"));
 
@@ -423,36 +321,16 @@ class WiFiManager
       // Lost connection in running. Give chance to reconfig.
       // Check WiFi status every 5s and update status
       // Check twice to be sure wifi disconnected is real
-      static unsigned long checkstatus_timeout = 0;
 #define WIFI_STATUS_CHECK_INTERVAL    5000L
 
-      static uint32_t curMillis;
-
-      curMillis = millis();
+      uint32_t curMillis = millis();
 
       // Call the double reset detector loop method every so often,
       // so that it can recognise when the timeout expires.
       // You can also call rd.stop() when you wish to no longer
       // consider the next reset as a double reset.
       rd->loop();
-
-      if (curMillis > checkstatus_timeout)
-      {
-        switch (state) {
-          case WM_CONNECTING:
-            if (WiFi.status() == WL_CONNECTED)
-              state = hasToken() ? WM_READY : WM_FETCH_CODE;
-            break;
-          case WM_FETCH_CODE:
-            if (fetchUserCode())
-              state = WM_FETCH_TOKEN;
-            break;
-          case WM_FETCH_TOKEN:
-            if (fetchAccessToken())
-              state = WM_READY;
-        }
-        checkstatus_timeout = curMillis + WIFI_STATUS_CHECK_INTERVAL;
-      }
+      loopState();
       return;
 
       // Lost connection in running. Give chance to reconfig.
@@ -460,7 +338,7 @@ class WiFiManager
       {
         // If configTimeout but user hasn't connected to configWeb => try to reconnect WiFi
         // But if user has connected to configWeb, stay there until done, then reset hardware
-        if ( configuration_mode && ( configTimeout == 0 ||  millis() < configTimeout ) )
+        if ( state != WM_READY && ( configTimeout == 0 ||  millis() < configTimeout ) )
         {
           retryTimes = 0;
           // Fix ESP32-S2 issue with WebServer (https://github.com/espressif/arduino-esp32/issues/4348)
@@ -473,7 +351,7 @@ class WiFiManager
 
 //         // If we're here but still in configuration_mode, permit running TIMES_BEFORE_RESET times before reset hardware
 //         // to permit user another chance to config.
-//         if ( configuration_mode && (configTimeout != 0) ) {
+//         if ( state != WM_READY && (configTimeout != 0) ) {
 //           ESP_WML_LOGDEBUG(F("r:Check RESET_IF_CONFIG_TIMEOUT"));
 
 //           if (++retryTimes <= CONFIG_TIMEOUT_RETRYTIMES_BEFORE_RESET) {
@@ -495,7 +373,7 @@ class WiFiManager
 
             ESP_WML_LOGERROR(F("r:WLost.ReconW"));
 
-            if (connectMultiWiFi() == WL_CONNECTED)
+            if (wmConnectWifiMulti(wifiMulti) == WL_CONNECTED)
             {
 #if USE_LED_BUILTIN
               // turn the LED_BUILTIN OFF to tell us we exit configuration mode.
@@ -508,7 +386,7 @@ class WiFiManager
 #else
           ESP_WML_LOGINFO(F("run: WiFi lost. Reconnect WiFi"));
 
-          if (connectMultiWiFi() == WL_CONNECTED) {
+          if (wmConnectWifiMulti(wifiMulti) == WL_CONNECTED) {
 #if USE_LED_BUILTIN
             // turn the LED_BUILTIN OFF to tell us we exit configuration mode.
             digitalWrite(LED_BUILTIN, LOW);
@@ -523,10 +401,10 @@ class WiFiManager
         //startConfigurationMode();
       }
       // else
-//       if (configuration_mode)
+//       if (state != WM_READY)
 //       {
 //         // WiFi is connected and we are in configuration_mode
-//         configuration_mode = false;
+//         state = WM_READY;
 //         ESP_WML_LOGINFO(F("run: got WiFi back"));
 
 // #if USE_LED_BUILTIN
@@ -551,15 +429,15 @@ class WiFiManager
     //////////////////////////////////////////////
 
     bool isConfigDataValid()  { return hadConfigData; }
-    bool isConfigMode()       { return configuration_mode; }
+    bool isConfigMode()       { return state != WM_READY; }
     String localIP()          { return WiFi.localIP().toString(); }
 
     void setMinimumSignalQuality(const int& quality) { _minimumQuality = quality; }
-    void setHostname() { if (RFC952_hostname[0] != 0) WiFi.setHostname(RFC952_hostname); }
+
     void setConfigPortalIP(const IPAddress& portalIP = IPAddress(192, 168, 4, 1)) { portal_apIP = portalIP; }
-    bool getConfigData()      { return ESP_WM_LITE_config.load(); }
-    void clearConfigData()    { ESP_WM_LITE_config.clear(); }
-    void saveConfigData()     { ESP_WM_LITE_config.save(); }
+    bool loadConfigData()     { return config.load(); }
+    void clearConfigData()    { config.clear(); }
+    void saveConfigData()     { config.save(); }
     void saveAllConfigData()  { saveConfigData(); }
 
     void setConfigPortal(const String& ssid = "", const String& pass = "")
@@ -585,63 +463,18 @@ class WiFiManager
 
     //////////////////////////////////////////////
 
-    void setSTAStaticIPConfig(const IPAddress& ip, const IPAddress& gw,
-                              const IPAddress& sn = IPAddress(255, 255, 255, 0),
-                              const IPAddress& dns_address_1 = IPAddress(0, 0, 0, 0),
-                              const IPAddress& dns_address_2 = IPAddress(0, 0, 0, 0))
-    {
-      static_IP     = ip;
-      static_GW     = gw;
-      static_SN     = sn;
-
-      // Default to local GW
-      if (dns_address_1 == IPAddress(0, 0, 0, 0))
-        static_DNS1   = gw;
-      else
-        static_DNS1   = dns_address_1;
-
-      // Default to Google DNS (8, 8, 8, 8)
-      if (dns_address_2 == IPAddress(0, 0, 0, 0))
-        static_DNS2   = IPAddress(8, 8, 8, 8);
-      else
-        static_DNS2   = dns_address_2;
-    }
-
-    //////////////////////////////////////////////
-
-    void assertConfig() { if (!hadConfigData) getConfigData(); }
-
-    String getWiFiSSID(const uint8_t& index) {
-      if (index >= WM_NUM_WIFI_CREDENTIALS)
-        return "";
-
-      assertConfig();
-      return ESP_WM_LITE_config.wifiCreds[index].ssid;
-    }
-
-    String getWiFiPW(const uint8_t& index) {
-      if (index >= WM_NUM_WIFI_CREDENTIALS)
-        return "";
-
-      assertConfig();
-      return ESP_WM_LITE_config.wifiCreds[index].pw;
-    }
+    void assertConfig() { if (!hadConfigData) loadConfigData(); }
 
     String getBoardName() {
       assertConfig();
-      return ESP_WM_LITE_config.boardName;
+      return config.boardName;
     }
 
     //////////////////////////////////////////////
 
-    ESP_WM_LITE_Configuration* getFullConfigData(ESP_WM_LITE_Configuration *configData) {
+    WMConfig & getConfig() {
       assertConfig();
-
-      // Check if NULL pointer
-      if (configData)
-        memcpy(configData, &ESP_WM_LITE_config, sizeof(ESP_WM_LITE_Configuration));
-
-      return configData;
+      return config;
     }
 
     //////////////////////////////////////////////
@@ -704,13 +537,10 @@ class WiFiManager
 
 
   private:
-    String ipAddress = "0.0.0.0";
-
-    // WiFiMulti wifiMulti;
+    WiFiMulti wifiMulti;
     AsyncWebServer *server = nullptr;
+    AsyncEventSource *events = nullptr;
     AsyncDNSServer *dnsServer = nullptr;
-
-    bool configuration_mode = false;
 
     unsigned long configTimeout;
     bool hadConfigData = false;
@@ -719,11 +549,7 @@ class WiFiManager
     bool isForcedConfigPortal   = false;
     bool persForcedConfigPortal = false;
 
-    ESP_WM_LITE_Configuration ESP_WM_LITE_config;
-
-    uint16_t totalDataSize = 0;
-
-    String macAddress = "";
+    WMConfig config;
 
     IPAddress portal_apIP = IPAddress(192, 168, 4, 1);
     int WiFiAPChannel = 10;
@@ -732,14 +558,9 @@ class WiFiManager
     String portal_pass = "";
 
     WMState state = WM_READY;
+    unsigned long checkStateTimeout = 0;
     String deviceCode = "";
     String userCode = "";
-
-    IPAddress static_IP   = IPAddress(0, 0, 0, 0);
-    IPAddress static_GW   = IPAddress(0, 0, 0, 0);
-    IPAddress static_SN   = IPAddress(255, 255, 255, 0);
-    IPAddress static_DNS1 = IPAddress(0, 0, 0, 0);
-    IPAddress static_DNS2 = IPAddress(0, 0, 0, 0);
 
 #if USING_CORS_FEATURE
     PGM_P _CORS_Header = WM_HTTP_CORS_ALLOW_ALL;   // "*";
@@ -747,48 +568,17 @@ class WiFiManager
 
     int WiFiNetworksFound = 0;    // Number of SSIDs found by WiFi scan, including low quality and duplicates
     int *indices;                 // WiFi network data, filled by scan (SSID, BSSID)
-    String ListOfSSIDs = "";      // List of SSIDs found by scan, in HTML <option> format
-
-    //////////////////////////////////////
-
-#define RFC952_HOSTNAME_MAXLEN      24u
-
-    char RFC952_hostname[RFC952_HOSTNAME_MAXLEN + 1];
-
-    char* getRFC952_hostname(const char* iHostname)
-    {
-      memset(RFC952_hostname, 0, sizeof(RFC952_hostname));
-      size_t len = std::min(RFC952_HOSTNAME_MAXLEN, strlen(iHostname));
-      size_t j = 0;
-      for (size_t i = 0; i < len - 1; i++)
-        if (isalnum(iHostname[i]) || iHostname[i] == '-')
-          RFC952_hostname[j++] = iHostname[i];
-
-      // no '-' as last char
-      if (isalnum(iHostname[len - 1]) || (iHostname[len - 1] != '-'))
-        RFC952_hostname[j] = iHostname[len - 1];
-
-      return RFC952_hostname;
-    }
-
-    //////////////////////////////////////
-
-    void displayWiFiData()
-    {
-      ESP_WML_LOGERROR3(F("SSID="), WiFi.SSID(), F(",RSSI="), WiFi.RSSI());
-      ESP_WML_LOGERROR1(F("IP="), WiFi.localIP() );
-    }
 
     //////////////////////////////////////
 
     bool isWiFiConfigValid()
     {
-      if (!ESP_WM_LITE_config.wifiConfigValid()) {
+      if (!config.wifiConfigValid()) {
         // If SSID, PW ="blank" or NULL, set the flag
         ESP_WML_LOGERROR(F("Invalid Stored WiFi Config Data"));
 
         // Nullify the invalid data to avoid displaying garbage
-        ESP_WM_LITE_config.resetZero();
+        config.resetZero();
 
         hadConfigData = false;
 
@@ -890,86 +680,14 @@ class WiFiManager
     void loadAndSaveDefaultConfigData()
     {
       // Load Default Config Data from Sketch
-      memcpy(&ESP_WM_LITE_config, &defaultConfig, sizeof(ESP_WM_LITE_config));
-      strcpy(ESP_WM_LITE_config.header, WM_BOARD_TYPE);
+      memcpy(&config, &defaultConfig, sizeof(config));
+      strcpy(config.header, WM_BOARD_TYPE);
 
       // Including config and dynamic data, and assume valid
       saveConfigData();
 
       ESP_WML_LOGERROR(F("======= Start Loaded Config Data ======="));
-      ESP_WM_LITE_config.print();
-    }
-
-    //////////////////////////////////////////////
-
-    // New connectMultiWiFi() logic from v1.7.0
-    // Max times to try WiFi per loop() iteration. To avoid blocking issue in loop()
-    // Default 1 and minimum 1.
-#if !defined(MAX_NUM_WIFI_RECON_TRIES_PER_LOOP)
-#define MAX_NUM_WIFI_RECON_TRIES_PER_LOOP     1
-#else
-#if (MAX_NUM_WIFI_RECON_TRIES_PER_LOOP < 1)
-#define MAX_NUM_WIFI_RECON_TRIES_PER_LOOP     1
-#endif
-#endif
-
-    uint8_t connectMultiWiFi()
-    {
-      // For ESP32, this better be 0 to shorten the connect time.
-      // For ESP32-S2/C3, must be > 500
-#if ( USING_ESP32_S2 || USING_ESP32_C3 )
-#define WIFI_MULTI_1ST_CONNECT_WAITING_MS           500L
-#else
-      // For ESP32 core v1.0.6, must be >= 500
-#define WIFI_MULTI_1ST_CONNECT_WAITING_MS           800L
-#endif
-
-#define WIFI_MULTI_CONNECT_WAITING_MS                   500L
-
-      uint8_t status;
-
-      ESP_WML_LOGINFO(F("Connecting MultiWifi..."));
-
-      // WiFi.mode(WIFI_STA);
-
-      setHostname();
-
-      int i = 0;
-      // status = wifiMulti.run();
-      delay(WIFI_MULTI_1ST_CONNECT_WAITING_MS);
-
-      uint8_t numWiFiReconTries = 0;
-
-      while ( ( status != WL_CONNECTED ) && (numWiFiReconTries++ < MAX_NUM_WIFI_RECON_TRIES_PER_LOOP) )
-      {
-        status = WiFi.status();
-
-        if ( status == WL_CONNECTED )
-          break;
-        else
-          delay(WIFI_MULTI_CONNECT_WAITING_MS);
-      }
-
-      if ( status == WL_CONNECTED )
-      {
-        ESP_WML_LOGWARN1(F("WiFi connected after time: "), i);
-        ESP_WML_LOGWARN3(F("SSID="), WiFi.SSID(), F(",RSSI="), WiFi.RSSI());
-        ESP_WML_LOGWARN3(F("Channel="), WiFi.channel(), F(",IP="), WiFi.localIP() );
-      }
-      else
-      {
-        ESP_WML_LOGERROR(F("WiFi not connected"));
-
-#if RESET_IF_NO_WIFI
-
-        // To avoid unnecessary DRD
-        rd->loop();
-        resetFunc();
-
-#endif
-      }
-
-      return status;
+      config.print();
     }
 
     //////////////////////////////////////////////
@@ -1076,22 +794,21 @@ class WiFiManager
       json += ']';
 
     if (hadConfigData) {
-      jsonAppendKeyValue(json, FPSTR("id"), ESP_WM_LITE_config.wifiCreds[0].ssid);
-      jsonAppendKeyValue(json, FPSTR("pw"), ESP_WM_LITE_config.wifiCreds[0].pw, PASS_OBFUSCATE_STRING);
-      jsonAppendKeyValue(json, FPSTR("id1"), ESP_WM_LITE_config.wifiCreds[1].ssid);
-      jsonAppendKeyValue(json, FPSTR("pw1"), ESP_WM_LITE_config.wifiCreds[1].pw, PASS_OBFUSCATE_STRING);
+      jsonAppendKeyValue(json, FPSTR("id"), config.getSSID(0));
+      jsonAppendKeyValue(json, FPSTR("pw"), config.getPW(0), PASS_OBFUSCATE_STRING);
+      jsonAppendKeyValue(json, FPSTR("id1"), config.getSSID(1));
+      jsonAppendKeyValue(json, FPSTR("pw1"), config.getPW(1), PASS_OBFUSCATE_STRING);
 #if USING_BOARD_NAME
-      jsonAppendKeyValue(json, FPSTR("nm"), ESP_WM_LITE_config.boardName);
+      jsonAppendKeyValue(json, FPSTR("nm"), config.boardName);
 #endif
     }
 
-      jsonAppendKeyValue(json, FPSTR("host"), RFC952_hostname);
       json += '}';
     }
 
     //////////////////////////////////////////////
 
-    void getConfig(AsyncWebServerRequest *request) {
+    void handlerConfigGet(AsyncWebServerRequest *request) {
       String json;
       createConfigJson(json);
 
@@ -1131,17 +848,17 @@ class WiFiManager
       }
     }
 
-    void updateConfig(AsyncWebServerRequest *request)
+    void handlerConfigSet(AsyncWebServerRequest *request)
     {
-      ESP_WM_LITE_config.resetZero();
-      strcpy(ESP_WM_LITE_config.header, WM_BOARD_TYPE);
+      config.resetZero();
+      strcpy(config.header, WM_BOARD_TYPE);
 
-      parseParam(request, FPSTR("id"), ESP_WM_LITE_config.wifiCreds[0].ssid, WM_SSID_MAX_LEN);
-      parseParam(request, FPSTR("pw"), ESP_WM_LITE_config.wifiCreds[0].pw, WM_PASSWORD_MAX_LEN, PASS_OBFUSCATE_STRING);
-      parseParam(request, FPSTR("id1"), ESP_WM_LITE_config.wifiCreds[1].ssid, WM_SSID_MAX_LEN);
-      parseParam(request, FPSTR("pw1"), ESP_WM_LITE_config.wifiCreds[1].pw, WM_PASSWORD_MAX_LEN, PASS_OBFUSCATE_STRING);
+      parseParam(request, FPSTR("id"), config.wifiCreds[0].ssid, WM_SSID_MAX_LEN);
+      parseParam(request, FPSTR("pw"), config.wifiCreds[0].pw, WM_PASSWORD_MAX_LEN, PASS_OBFUSCATE_STRING);
+      parseParam(request, FPSTR("id1"), config.wifiCreds[1].ssid, WM_SSID_MAX_LEN);
+      parseParam(request, FPSTR("pw1"), config.wifiCreds[1].pw, WM_PASSWORD_MAX_LEN, PASS_OBFUSCATE_STRING);
 #if USING_BOARD_NAME
-      parseParam(request, FPSTR("nm"), ESP_WM_LITE_config.boardName, WM_BOARD_NAME_MAX_LEN);
+      parseParam(request, FPSTR("nm"), config.boardName, WM_BOARD_NAME_MAX_LEN);
 #endif
 
       {
@@ -1158,11 +875,6 @@ class WiFiManager
         // Done with CP, Clear CP Flag here if forced
         if (isForcedConfigPortal)
           clearForcedCP();
-
-        this->begin("", WIFI_AP_STA);
-        if (WiFi.status() == WL_CONNECTED) {
-          fetchUserCode();
-        }
 
         request->send(204, FPSTR(WM_HTTP_HEAD_TEXT_HTML));
 
@@ -1182,10 +894,55 @@ class WiFiManager
   #define CONFIG_TIMEOUT      60000L
 #endif
 
+    void setState(WMState newState) {
+      if (this->state == newState)
+        return;
+      uint32_t curMillis = millis();
+      events->send(String(newState).c_str(), "s", curMillis, 1000);
+      switch (newState) {
+        case WM_READY:
+        case WM_WIFI_CONFIG:
+        case WM_FETCH_CODE:
+          break;
+        case WM_CONNECTING:
+          this->begin(WIFI_AP_STA);
+          break;
+        case WM_FETCH_TOKEN:
+          events->send(this->userCode.c_str(), "c", curMillis, 1000);
+          break;
+      }
+      this->state = newState;
+      checkStateTimeout = 0;
+    }
+
+    void loopState() {
+      uint32_t curMillis = millis();
+      if (curMillis - checkStateTimeout < WIFI_STATUS_CHECK_INTERVAL)
+        return;
+      checkStateTimeout = curMillis;
+
+      switch (this->state) {
+        case WM_READY:
+        case WM_WIFI_CONFIG:
+          break;
+        case WM_CONNECTING:
+          if (WiFi.status() == WL_CONNECTED)
+            setState(hasToken() ? WM_READY : WM_FETCH_CODE);
+          break;
+        case WM_FETCH_CODE:
+          if (fetchUserCode())
+            setState(WM_FETCH_TOKEN);
+          break;
+        case WM_FETCH_TOKEN:
+          if (fetchAccessToken())
+            setState(WM_READY);
+      }
+    }
+
     void startConfigurationMode()
     {
       configTimeout = 0;  // To allow user input in CP
-      WiFiNetworksFound = scanWifiNetworks(&indices);
+      WiFiNetworksFound = wmScanWifiNetworks(&indices);
 
 #if USE_LED_BUILTIN
       // turn the LED_BUILTIN ON to tell us we are in configuration mode.
@@ -1193,13 +950,7 @@ class WiFiManager
 #endif
 
       if (portal_ssid.isEmpty())
-      {
-        String chipID = String(ESP_getChipId(), HEX);
-        chipID.toUpperCase();
-        portal_ssid = "ESP_" + chipID;
-        // if (portal_pass.isEmpty())
-        //   portal_pass = "MyESP_" + chipID;
-      }
+        portal_ssid = WM_HOSTNAME();
 
       WiFi.mode(WIFI_AP_STA);
       listSPIFFSFiles();
@@ -1207,14 +958,10 @@ class WiFiManager
       // New
       delay(100);
 
-      static int channel;
-
+      int channel = WiFiAPChannel;
       // Use random channel if WiFiAPChannel == 0
-      if (WiFiAPChannel == 0)
-        //channel = random(MAX_WIFI_CHANNEL) + 1;
+      if (channel == 0)
         channel = (millis() % MAX_WIFI_CHANNEL) + 1;
-      else
-        channel = WiFiAPChannel;
 
       // softAPConfig() must be put before softAP() for ESP8266 core v3.0.0+ to work.
       // ESP32 or ESP8266is core v3.0.0- is OK either way
@@ -1228,20 +975,19 @@ class WiFiManager
 
       if (!server)
       {
-        server = new AsyncWebServer(HTTP_PORT);
+        server = new AsyncWebServer(WM_HTTP_PORT);
+        events = new AsyncEventSource(PSTR("/status"));
       }
 
       if (!dnsServer)
-      {
         dnsServer = new AsyncDNSServer();
-      }
 
       //See https://stackoverflow.com/questions/39803135/c-unresolved-overloaded-function-type?rq=1
       if (server && dnsServer)
       {
         // CaptivePortal
         // if DNSServer is started with "*" for domain name, it will reply with provided IP to all DNS requests
-        dnsServer->start(DNS_PORT, "*", portal_apIP);
+        dnsServer->start(WM_DNS_PORT, "*", portal_apIP);
         
         // reply to all requests with same HTML
         server->onNotFound([this](AsyncWebServerRequest * request)
@@ -1264,17 +1010,24 @@ class WiFiManager
         // config handler
         server->on("/config", HTTP_GET, [this](AsyncWebServerRequest * request) {
           Serial.print(F("GET CONFIG"));
-          getConfig(request);
+          handlerConfigGet(request);
         });
         server->on("/config", HTTP_POST, [this](AsyncWebServerRequest * request) {
           Serial.print(F("UPDATE CONFIG"));
-          updateConfig(request);
+          handlerConfigSet(request);
+          setState(WM_CONNECTING);
         });
         server->on("/code", HTTP_GET, [this](AsyncWebServerRequest * request) {
           Serial.print(F("FETCH CODE"));
           fetchUserCode();
         });
 
+        // Handle Web Server Events
+        events->onConnect([this](AsyncEventSourceClient *client){
+          client->send(String(this->state).c_str(), "s", millis(), 1000);
+          client->send(this->userCode.c_str(), "c", millis(), 1000);
+        });
+        server->addHandler(events);
         server->begin();
       }
 
@@ -1288,83 +1041,9 @@ class WiFiManager
         ESP_WML_LOGDEBUG(F("s:configTimeout = 0"));
       }
 
-      configuration_mode = true;
-    }
-
-    int           _minimumQuality         = INT_MIN;
-
-    //Scan for WiFiNetworks in range and sort by signal strength
-    //space for indices array allocated on the heap and should be freed when no longer required
-    int scanWifiNetworks(int **indicesptr)
-    {
-      ESP_WML_LOGDEBUG(F("Scanning WiFis..."));
-      int n = WiFi.scanNetworks();
-      ESP_WML_LOGDEBUG1(F("scanWifiNetworks: Done, Scanned Networks n = "), n);
-
-      if (n <= 0) {
-        ESP_WML_LOGDEBUG(F("No network found"));
-        return 0;
-      }
-
-      // Allocate space off the heap for indices array.
-      // This space should be freed when no longer required.
-      int* indices = (int *)malloc(n * sizeof(int));
-      if (indices == NULL) {
-        ESP_WML_LOGDEBUG(F("ERROR: Out of memory"));
-        *indicesptr = NULL;
-        return 0;
-      }
-
-      *indicesptr = indices;
-
-      //sort networks
-      for (int i = 0; i < n; i++)
-        indices[i] = i;
-
-      ESP_WML_LOGDEBUG(F("Sorting"));
-
-      // RSSI SORT
-      // old sort
-      for (int i = 0; i < n; i++)
-        for (int j = i + 1; j < n; j++)
-          if (WiFi.RSSI(indices[j]) > WiFi.RSSI(indices[i]))
-            std::swap(indices[i], indices[j]);
-
-      ESP_WML_LOGDEBUG(F("Removing Dup"));
-
-      // remove duplicates ( must be RSSI sorted )
-      String cssid;
-
-      for (int i = 0; i < n; i++) {
-        if (indices[i] == -1) continue;
-        cssid = WiFi.SSID(indices[i]);
-
-        for (int j = i + 1; j < n; j++)
-          if (cssid == WiFi.SSID(indices[j])) {
-            ESP_WML_LOGDEBUG1("DUP AP:", WiFi.SSID(indices[j]));
-            indices[j] = -1; // set dup aps to index -1
-          }
-      }
-
-      for (int i = 0; i < n; i++) {
-        if (indices[i] == -1) continue; // skip dups
-        int quality = getRSSIasQuality(WiFi.RSSI(indices[i]));
-        if (_minimumQuality > quality) {
-          indices[i] = -1;
-          ESP_WML_LOGDEBUG(F("Skipping low quality"));
-        }
-      }
-
-      ESP_WML_LOGWARN(F("WiFi networks found:"));
-
-      for (int i = 0; i < n; i++) {
-        if (indices[i] == -1) continue; // skip dups
-        ESP_WML_LOGWARN5(i + 1, ": ", WiFi.SSID(indices[i]), ", ", WiFi.RSSI(i), "dB");
-      }
-
-      return n;
+      state = WM_WIFI_CONFIG;
     }
 
 };
 
-#endif    //ESPAsync_WiFiManager_Lite_h
+#endif //wm_h_
