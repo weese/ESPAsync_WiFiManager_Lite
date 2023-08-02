@@ -8,9 +8,9 @@
 ///////////////////////////////////////////
 
 #ifndef WM_VERSION
-  #define WM_VERSION_MAJOR  1
-  #define WM_VERSION_MINOR  10
-  #define WM_VERSION_PATCH  5
+  #define WM_VERSION_MAJOR  "1"
+  #define WM_VERSION_MINOR  "10"
+  #define WM_VERSION_PATCH  "5"
 
   #define WM_VERSION        "WifiManager v" WM_VERSION_MAJOR "." WM_VERSION_MINOR "." WM_VERSION_PATCH
   #define WM_VERSION_INT    1010005

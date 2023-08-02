@@ -58,6 +58,8 @@ typedef struct Configuration
         strcpy(header, WM_BOARD_TYPE);
     }
 
+    bool isZero() { return checksum == 0; }
+
     void resetDefault()
     {
         memcpy(this, &defaultConfig, sizeof(Configuration));
@@ -106,7 +108,7 @@ typedef struct Configuration
         checksum = calcChecksum();
         ESP_WML_LOGINFO1(F("WCSum=0x"), String(checksum, HEX));
 
-        bool ok = saveFile((const char *)this, sizeof(Configuration), filename);
+        bool ok = saveFile((uint8_t *)this, sizeof(Configuration), filename);
         ESP_WML_LOGINFO(ok ? F("OK") : F("failed"));
     }
 
@@ -129,8 +131,8 @@ typedef struct Configuration
     // Return false if init new EEPROM or SPIFFS. No more need trying to connect. Go directly to config mode
     bool load()
     {
-        if (loadFile((char *)this, sizeof(Configuration), WM_CONFIG_FILENAME) ||
-            loadFile((char *)this, sizeof(Configuration), WM_CONFIG_FILENAME_BACKUP))
+        if (loadFile((uint8_t *)this, sizeof(Configuration), WM_CONFIG_FILENAME) ||
+            loadFile((uint8_t *)this, sizeof(Configuration), WM_CONFIG_FILENAME_BACKUP))
         {
             ESP_WML_LOGINFO(F("OK"));
             if (configValid() && wifiConfigValid())

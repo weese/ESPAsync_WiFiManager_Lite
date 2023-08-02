@@ -51,68 +51,6 @@ struct FunctionHandler
     void *data;
 };
 
-// Central callback for FermiCloud
-void fermionHandlerCallback(char *topic, const char *payload, unsigned int length)
-{
-    // handle message arrived
-    for (uint8_t i = 0; i < Particle.handlerCount; i++)
-    {
-        FunctionHandler &handler = Particle.handlers[i];
-        if (handler.topic == topic)
-        {
-            if (handler.data)
-                handler.funcWithData(handler.data, topic, payload);
-            else
-                handler.func(topic, payload);
-        }
-    }
-}
-
-// Central callback for FermiCloud MQTT events
-static esp_err_t fermionMqttHandler(esp_mqtt_event_handle_t event)
-{
-    esp_mqtt_client_handle_t client = event->client;
-
-    switch (event->event_id)
-    {
-    case MQTT_EVENT_CONNECTED:
-        Serial.println("MQTT_EVENT_CONNECTED");
-        // Subscribe to all handler topics
-        for (uint8_t i = 0; i < Particle.handlerCount; i++)
-            esp_mqtt_client_subscribe(client, Particle.handlers[i].topic.c_str(), 0);
-        
-        break;
-
-    case MQTT_EVENT_DISCONNECTED:
-        Serial.println("MQTT_EVENT_DISCONNECTED");
-        break;
-
-    case MQTT_EVENT_SUBSCRIBED:
-        Serial.println("MQTT_EVENT_SUBSCRIBED");
-        break;
-
-    case MQTT_EVENT_UNSUBSCRIBED:
-        Serial.println("MQTT_EVENT_UNSUBSCRIBED");
-        break;
-
-    case MQTT_EVENT_PUBLISHED:
-        Serial.println("MQTT_EVENT_PUBLISHED");
-        break;
-
-    case MQTT_EVENT_DATA:
-        Serial.println("MQTT_EVENT_DATA");
-        Serial.printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
-        Serial.printf("DATA=%.*s\r\n", event->data_len, event->data);
-        fermionHandlerCallback(event->topic, event->data, event->data_len);
-        break;
-
-    case MQTT_EVENT_ERROR:
-        Serial.println("MQTT_EVENT_ERROR");
-        break;
-    }
-    return ESP_OK;
-}
-
 struct Fermion
 {
     FunctionHandler handlers[FERMIC_FUNCTION_HANDLERS];
@@ -134,12 +72,13 @@ struct Fermion
         
         // 2. Try to connect to MQTT
         esp_mqtt_client_config_t mqtt_cfg = {
-            .event_handle = fermionMqttHandler,
+            .event_handle = mqttHandler,
             .uri = FERMI_CLOUD_MQTT_HOSTNAME,
             .port = FERMI_CLOUD_MQTT_PORT,
             .client_id = deviceID.c_str(),
             .username = "",
             .password = accessToken.c_str(),
+            .user_context = this,
         };
         mqttClient = esp_mqtt_client_init(&mqtt_cfg);
         if (!mqttClient)
@@ -160,25 +99,87 @@ struct Fermion
     {
         char topic[300];
         _getEventTopic(topic, sizeof(topic), eventName);
-        esp_mqtt_client_subscribe(mqttClient, topic, 0);
-        handlers[handlerCount] = {
+        if (esp_mqtt_client_subscribe(mqttClient, topic, 0) < 0)
+            return false;
+        handlers[handlerCount] = FunctionHandler{
             .func = handler,
             .topic = topic,
             .data = NULL,
         };
         handlerCount++;
+        return true;
     }
 
-    void unsubscribe(const char *eventName)
+    bool unsubscribe(const char *eventName)
     {
         char topic[300];
         _getEventTopic(topic, sizeof(topic), eventName);
-        esp_mqtt_client_unsubscribe(mqttClient, topic);
+        return esp_mqtt_client_unsubscribe(mqttClient, topic) >= 0;
     }
 
     // bool subscribe(System.deviceID() + "/" PREFIX_WIDGET, handlerWidget, MY_DEVICES);
 
     // Particle.function("notify", handlerNotificationFunction);
+
+    void handlerCallback(char *topic, const char *payload, unsigned int length)
+    {
+        for (uint8_t i = 0; i < handlerCount; i++)
+        {
+            FunctionHandler &handler = handlers[i];
+            if (handler.topic == topic)
+            {
+                if (handler.data)
+                    handler.funcWithData(handler.data, topic, payload);
+                else
+                    handler.func(topic, payload);
+            }
+        }
+    }
+
+    static esp_err_t mqttHandler(esp_mqtt_event_handle_t event)
+    {
+        esp_mqtt_client_handle_t client = event->client;
+        Fermion *fermion = (Fermion *)(event->user_context);
+
+        switch (event->event_id)
+        {
+        case MQTT_EVENT_CONNECTED:
+            Serial.println("MQTT_EVENT_CONNECTED");
+            // Subscribe to all handler topics
+            for (uint8_t i = 0; i < fermion->handlerCount; i++)
+                esp_mqtt_client_subscribe(client, fermion->handlers[i].topic.c_str(), 0);
+            
+            break;
+
+        case MQTT_EVENT_DISCONNECTED:
+            Serial.println("MQTT_EVENT_DISCONNECTED");
+            break;
+
+        case MQTT_EVENT_SUBSCRIBED:
+            Serial.println("MQTT_EVENT_SUBSCRIBED");
+            break;
+
+        case MQTT_EVENT_UNSUBSCRIBED:
+            Serial.println("MQTT_EVENT_UNSUBSCRIBED");
+            break;
+
+        case MQTT_EVENT_PUBLISHED:
+            Serial.println("MQTT_EVENT_PUBLISHED");
+            break;
+
+        case MQTT_EVENT_DATA:
+            Serial.println("MQTT_EVENT_DATA");
+            Serial.printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
+            Serial.printf("DATA=%.*s\r\n", event->data_len, event->data);
+            fermion->handlerCallback(event->topic, event->data, event->data_len);
+            break;
+
+        case MQTT_EVENT_ERROR:
+            Serial.println("MQTT_EVENT_ERROR");
+            break;
+        }
+        return ESP_OK;
+    }
 
 private:
 

@@ -98,7 +98,7 @@ int wmScanWifiNetworks(int **indicesptr)
 #define WM_HOSTNAME wmHostname
 #endif
 
-String&& wmHostname()
+String wmHostname()
 {
     char hostname[15]; // length of "FERMION-XXYYZZ" + 1
     uint8_t eth_mac[6];

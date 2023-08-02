@@ -167,17 +167,6 @@ class WiFiManager
       free(indices);
     }
 
-    //////////////////////////////////////////
-
-#if !defined(USE_LED_BUILTIN)
-  #define USE_LED_BUILTIN     true      // use builtin LED to show configuration mode
-#endif
-
-// For ESP32
-#ifndef LED_BUILTIN
-  #define LED_BUILTIN       2         // Pin D2 mapped to pin GPIO2/ADC12 of ESP32, control on-board LED
-#endif
-
 ///////////////////////////////////////////
 
 #if !defined(REQUIRE_ONE_SET_SSID_PW)
@@ -188,80 +177,37 @@ class WiFiManager
 
     //////////////////////////////////////////
 
-    String accessToken;
-
-    bool cloudConnect() {
+    bool cloudConnect(wifi_mode_t mode = WIFI_STA) {
       // 1. Try to load Wifi config
       if (!config.load()) return false;
 
-      // 2. Try to load access token
-      if (!fileExist(WM_TOKEN_FILENAME) &&
-          !fileExist(WM_TOKEN_FILENAME_BACKUP)) return false;
+      // 2. Test for access token
+      if (!hasToken()) return false;
       
       // 3. Connect Wifi
-      if (!wmConnectWifi(wifiMulti, config)) return false;
+      if (!wmConnectWifi(wifiMulti, config, mode)) return false;
       
       // 3. Connect to MQTT server
       if (!Particle.connect()) return false;
+
+      return true;
     }
 
     void begin(wifi_mode_t mode = WIFI_STA)
     {
 #define TIMEOUT_CONNECT_WIFI      30000
 
-#if USE_LED_BUILTIN
-      // Turn OFF
-      pinMode(LED_BUILTIN, OUTPUT);
-      digitalWrite(LED_BUILTIN, LOW);
-#endif
-
-      //// New MRD ////
       rd = new MultiResetDetector(RD_TIMEOUT, RD_ADDRESS);
 
-      bool noConfigPortal = true;
-
-      if (rd->detectMultiReset()) {
-        ESP_WML_LOGINFO(F("Multi Reset Detected"));
-        noConfigPortal = false;
-      }
-
-      if (LOAD_DEFAULT_CONFIG_DATA) {
-        ESP_WML_LOGDEBUG(F("======= Start Default Config Data ======="));
-        defaultConfig.print();
-      }
-
       wmSetHostname();
-      hadConfigData = loadConfigData();
 
-      isForcedConfigPortal = isForcedCP();
-
-      //  noConfigPortal when loadConfigData() OK and no MRD/DRD'ed
-      if (hadConfigData && noConfigPortal && (!isForcedConfigPortal) )
-      {
-        hadConfigData = true;
-
-        ESP_WML_LOGDEBUG(noConfigPortal ? F("bg: noConfigPortal = true") : F("bg: noConfigPortal = false"));
-
-        if (!wmConnectWifi(wifiMulti, config, mode))
-          startConfigurationMode(); // failed to connect to WiFi, will start configuration mode
-      } else {
-        ESP_WML_LOGDEBUG(isForcedConfigPortal ? F("bg: isForcedConfigPortal = true") : F("bg: isForcedConfigPortal = false"));
-
-        // If not persistent => clear the flag so that after reset. no more CP, even CP not entered and saved
-        if (persForcedConfigPortal) {
-          ESP_WML_LOGINFO1(F("bg:Stay forever in CP:"),
-                           isForcedConfigPortal ? F("Forced-Persistent") : (noConfigPortal ? F("No ConfigDat") : F("MRD")));
-        } else {
-          ESP_WML_LOGINFO1(F("bg:Stay forever in CP:"),
-                           isForcedConfigPortal ? F("Forced-non-Persistent") : (noConfigPortal ? F("No ConfigDat") : F("MRD")));
-          clearForcedCP();
-        }
-
-        hadConfigData = isForcedConfigPortal ? true : (noConfigPortal ? false : true);
-
-        // failed to connect to WiFi, will start configuration mode
-        startConfigurationMode();
+      if (!rd->detectMultiReset()) {
+        if (cloudConnect())
+          return;
       }
+
+      // failed to connect, will start configuration mode
+      startConfigurationMode();
     }
 
     //////////////////////////////////////////
@@ -375,10 +321,6 @@ class WiFiManager
 
             if (wmConnectWifiMulti(wifiMulti) == WL_CONNECTED)
             {
-#if USE_LED_BUILTIN
-              // turn the LED_BUILTIN OFF to tell us we exit configuration mode.
-              digitalWrite(LED_BUILTIN, LOW);
-#endif
               ESP_WML_LOGINFO(F("run: WiFi reconnected"));
             }
           }
@@ -387,10 +329,6 @@ class WiFiManager
           ESP_WML_LOGINFO(F("run: WiFi lost. Reconnect WiFi"));
 
           if (wmConnectWifiMulti(wifiMulti) == WL_CONNECTED) {
-#if USE_LED_BUILTIN
-            // turn the LED_BUILTIN OFF to tell us we exit configuration mode.
-            digitalWrite(LED_BUILTIN, LOW);
-#endif
             ESP_WML_LOGINFO(F("run: WiFi reconnected"));
           }
 
@@ -407,10 +345,6 @@ class WiFiManager
 //         state = WM_READY;
 //         ESP_WML_LOGINFO(F("run: got WiFi back"));
 
-// #if USE_LED_BUILTIN
-//         // turn the LED_BUILTIN OFF to tell us we exit configuration mode.
-//         digitalWrite(LED_BUILTIN, LOW);
-// #endif
 
 //         if (dnsServer) {
 //           dnsServer->stop();
@@ -428,17 +362,11 @@ class WiFiManager
 
     //////////////////////////////////////////////
 
-    bool isConfigDataValid()  { return hadConfigData; }
     bool isConfigMode()       { return state != WM_READY; }
     String localIP()          { return WiFi.localIP().toString(); }
 
     void setMinimumSignalQuality(const int& quality) { _minimumQuality = quality; }
-
     void setConfigPortalIP(const IPAddress& portalIP = IPAddress(192, 168, 4, 1)) { portal_apIP = portalIP; }
-    bool loadConfigData()     { return config.load(); }
-    void clearConfigData()    { config.clear(); }
-    void saveConfigData()     { config.save(); }
-    void saveAllConfigData()  { saveConfigData(); }
 
     void setConfigPortal(const String& ssid = "", const String& pass = "")
     {
@@ -463,57 +391,15 @@ class WiFiManager
 
     //////////////////////////////////////////////
 
-    void assertConfig() { if (!hadConfigData) loadConfigData(); }
+    void assertConfig() {
+        if (config.isZero())
+          config.load();
+    }
 
     String getBoardName() {
       assertConfig();
       return config.boardName;
     }
-
-    //////////////////////////////////////////////
-
-    WMConfig & getConfig() {
-      assertConfig();
-      return config;
-    }
-
-    //////////////////////////////////////////////
-
-    // Forced CP => Flag = 0xBEEFBEEF. Else => No forced CP
-    // Flag to be stored at (EEPROM_START + DRD_FLAG_DATA_SIZE + CONFIG_DATA_SIZE)
-    // to avoid corruption to current data
-    //#define FORCED_CONFIG_PORTAL_FLAG_DATA              ( (uint32_t) 0xDEADBEEF)
-    //#define FORCED_PERS_CONFIG_PORTAL_FLAG_DATA         ( (uint32_t) 0xBEEFDEAD)
-
-    const uint32_t FORCED_CONFIG_PORTAL_FLAG_DATA       = 0xDEADBEEF;
-    const uint32_t FORCED_PERS_CONFIG_PORTAL_FLAG_DATA  = 0xBEEFDEAD;
-
-#define FORCED_CONFIG_PORTAL_FLAG_DATA_SIZE     4
-
-    void resetAndEnterConfigPortal()
-    {
-      persForcedConfigPortal = false;
-
-      setForcedCP(false);
-
-      // Delay then reset the ESP8266 after save data
-      resetFunc();
-    }
-
-    //////////////////////////////////////////////
-
-    // This will keep CP forever, until you successfully enter CP, and Save data to clear the flag.
-    void resetAndEnterConfigPortalPersistent()
-    {
-      persForcedConfigPortal = true;
-      setForcedCP(true);
-      // Delay then reset the ESP8266 after save data
-      resetFunc();
-    }
-
-    //////////////////////////////////////
-
-    // New from v1.2.0, for configure CORS Header, default to WM_HTTP_CORS_ALLOW_ALL = "*"
 
     //////////////////////////////////////
 
@@ -543,11 +429,6 @@ class WiFiManager
     AsyncDNSServer *dnsServer = nullptr;
 
     unsigned long configTimeout;
-    bool hadConfigData = false;
-    bool hadDynamicData = false;
-
-    bool isForcedConfigPortal   = false;
-    bool persForcedConfigPortal = false;
 
     WMConfig config;
 
@@ -558,7 +439,8 @@ class WiFiManager
     String portal_pass = "";
 
     WMState state = WM_READY;
-    unsigned long checkStateTimeout = 0;
+    unsigned long timeLastStateCheck = 0;
+    unsigned long timeLastStateChange = 0;
     String deviceCode = "";
     String userCode = "";
 
@@ -568,127 +450,6 @@ class WiFiManager
 
     int WiFiNetworksFound = 0;    // Number of SSIDs found by WiFi scan, including low quality and duplicates
     int *indices;                 // WiFi network data, filled by scan (SSID, BSSID)
-
-    //////////////////////////////////////
-
-    bool isWiFiConfigValid()
-    {
-      if (!config.wifiConfigValid()) {
-        // If SSID, PW ="blank" or NULL, set the flag
-        ESP_WML_LOGERROR(F("Invalid Stored WiFi Config Data"));
-
-        // Nullify the invalid data to avoid displaying garbage
-        config.resetZero();
-
-        hadConfigData = false;
-
-        return false;
-      }
-
-      return true;
-    }
-
-    //////////////////////////////////////////////
-
-    void saveForcedCP(const uint32_t& value)
-    {
-      File file = FileFS.open(WM_CONFIG_PORTAL_FILENAME, "w");
-
-      ESP_WML_LOGINFO(F("SaveCPFile "));
-
-      if (file) {
-        file.write((uint8_t*) &value, sizeof(value));
-        file.close();
-        ESP_WML_LOGINFO(F("OK"));
-      } else
-        ESP_WML_LOGINFO(F("failed"));
-
-      // Trying open redundant CP file
-      file = FileFS.open(WM_CONFIG_PORTAL_FILENAME_BACKUP, "w");
-
-      ESP_WML_LOGINFO(F("SaveBkUpCPFile "));
-
-      if (file) {
-        file.write((uint8_t *) &value, sizeof(value));
-        file.close();
-        ESP_WML_LOGINFO(F("OK"));
-      } else
-        ESP_WML_LOGINFO(F("failed"));
-    }
-
-    //////////////////////////////////////////////
-
-    void setForcedCP(const bool& isPersistent)
-    {
-      uint32_t readForcedConfigPortalFlag = isPersistent ? FORCED_PERS_CONFIG_PORTAL_FLAG_DATA :
-                                            FORCED_CONFIG_PORTAL_FLAG_DATA;
-      ESP_WML_LOGDEBUG(isPersistent ? F("setForcedCP Persistent") : F("setForcedCP non-Persistent"));
-      saveForcedCP(readForcedConfigPortalFlag);
-    }
-
-    //////////////////////////////////////////////
-
-    void clearForcedCP()
-    {
-      uint32_t readForcedConfigPortalFlag = 0;
-      ESP_WML_LOGDEBUG(F("clearForcedCP"));
-      saveForcedCP(readForcedConfigPortalFlag);
-    }
-
-    //////////////////////////////////////////////
-
-    bool isForcedCP()
-    {
-      uint32_t readForcedConfigPortalFlag;
-      ESP_WML_LOGDEBUG(F("Check if isForcedCP"));
-
-      File file = FileFS.open(WM_CONFIG_PORTAL_FILENAME, "r");
-      ESP_WML_LOGINFO(F("LoadCPFile "));
-
-      if (!file) {
-        ESP_WML_LOGINFO(F("failed"));
-
-        // Trying open redundant config file
-        file = FileFS.open(WM_CONFIG_PORTAL_FILENAME_BACKUP, "r");
-        ESP_WML_LOGINFO(F("LoadBkUpCPFile "));
-
-        if (!file) {
-          ESP_WML_LOGINFO(F("failed"));
-          return false;
-        }
-      }
-
-      file.readBytes((char *) &readForcedConfigPortalFlag, sizeof(readForcedConfigPortalFlag));
-
-      ESP_WML_LOGINFO(F("OK"));
-      file.close();
-
-      // Return true if forced CP (0xDEADBEEF read at offset EPROM_START + DRD_FLAG_DATA_SIZE + CONFIG_DATA_SIZE)
-      // => set flag noForcedConfigPortal = false
-      if (readForcedConfigPortalFlag == FORCED_CONFIG_PORTAL_FLAG_DATA) {
-        persForcedConfigPortal = false;
-        return true;
-      } else if (readForcedConfigPortalFlag == FORCED_PERS_CONFIG_PORTAL_FLAG_DATA) {
-        persForcedConfigPortal = true;
-        return true;
-      }
-      return false;
-    }
-
-    //////////////////////////////////////////////
-
-    void loadAndSaveDefaultConfigData()
-    {
-      // Load Default Config Data from Sketch
-      memcpy(&config, &defaultConfig, sizeof(config));
-      strcpy(config.header, WM_BOARD_TYPE);
-
-      // Including config and dynamic data, and assume valid
-      saveConfigData();
-
-      ESP_WML_LOGERROR(F("======= Start Loaded Config Data ======="));
-      config.print();
-    }
 
     //////////////////////////////////////////////
 
@@ -736,7 +497,7 @@ class WiFiManager
     }
 
     bool hasToken() {
-        return FileFS.exists(WM_TOKEN_FILENAME);
+        return FileFS.exists(WM_TOKEN_FILENAME) || FileFS.exists(WM_TOKEN_FILENAME_BACKUP);
     }
 
     void saveToken(String const &token)
@@ -793,7 +554,7 @@ class WiFiManager
       }
       json += ']';
 
-    if (hadConfigData) {
+    if (!config.isZero()) {
       jsonAppendKeyValue(json, FPSTR("id"), config.getSSID(0));
       jsonAppendKeyValue(json, FPSTR("pw"), config.getPW(0), PASS_OBFUSCATE_STRING);
       jsonAppendKeyValue(json, FPSTR("id1"), config.getSSID(1));
@@ -870,20 +631,8 @@ class WiFiManager
         ESP_WML_LOGERROR(F("h:Updating EEPROM. Please wait for reset"));
 #endif
 
-        saveAllConfigData();
-
-        // Done with CP, Clear CP Flag here if forced
-        if (isForcedConfigPortal)
-          clearForcedCP();
-
+        config.save();
         request->send(204, FPSTR(WM_HTTP_HEAD_TEXT_HTML));
-
-        // TODO: uncomment
-        // ESP_WML_LOGERROR(F("h:Rst"));
-
-        // // TO DO : what command to reset
-        // // Delay then reset the board after save data
-        // resetFunc();
       }
     }
 
@@ -895,39 +644,46 @@ class WiFiManager
 #endif
 
     void setState(WMState newState) {
+      Serial.println("setState: " + String(newState));
       if (this->state == newState)
         return;
-      uint32_t curMillis = millis();
-      events->send(String(newState).c_str(), "s", curMillis, 1000);
+      timeLastStateChange = millis();
+      events->send(String(newState).c_str(), "s", timeLastStateChange, 1000);
       switch (newState) {
         case WM_READY:
         case WM_WIFI_CONFIG:
         case WM_FETCH_CODE:
           break;
         case WM_CONNECTING:
-          this->begin(WIFI_AP_STA);
+          // this->begin(WIFI_AP_STA);
+          wmConnectWifi(wifiMulti, config, WIFI_AP_STA);
           break;
         case WM_FETCH_TOKEN:
-          events->send(this->userCode.c_str(), "c", curMillis, 1000);
+          events->send(this->userCode.c_str(), "c", timeLastStateChange, 1000);
           break;
       }
       this->state = newState;
-      checkStateTimeout = 0;
+      timeLastStateCheck = 0;
     }
 
     void loopState() {
-      uint32_t curMillis = millis();
-      if (curMillis - checkStateTimeout < WIFI_STATUS_CHECK_INTERVAL)
+      unsigned long curMillis = millis();
+      if (curMillis - timeLastStateCheck < WIFI_STATUS_CHECK_INTERVAL)
         return;
-      checkStateTimeout = curMillis;
+      timeLastStateCheck = curMillis;
 
       switch (this->state) {
         case WM_READY:
         case WM_WIFI_CONFIG:
+          if (!config.isZero() && curMillis - timeLastStateChange > CONFIG_TIMEOUT)
+            setState(WM_CONNECTING);
           break;
         case WM_CONNECTING:
           if (WiFi.status() == WL_CONNECTED)
             setState(hasToken() ? WM_READY : WM_FETCH_CODE);
+          // abort after TIMEOUT_CONNECT_WIFI milliseconds and go back to Wifi config mode
+          if (curMillis - timeLastStateChange > TIMEOUT_CONNECT_WIFI)
+            setState(WM_WIFI_CONFIG);
           break;
         case WM_FETCH_CODE:
           if (fetchUserCode())
@@ -944,15 +700,10 @@ class WiFiManager
       configTimeout = 0;  // To allow user input in CP
       WiFiNetworksFound = wmScanWifiNetworks(&indices);
 
-#if USE_LED_BUILTIN
-      // turn the LED_BUILTIN ON to tell us we are in configuration mode.
-      digitalWrite(LED_BUILTIN, HIGH);
-#endif
-
       if (portal_ssid.isEmpty())
         portal_ssid = WM_HOSTNAME();
 
-      WiFi.mode(WIFI_AP_STA);
+      WiFi.mode(WIFI_AP);
       listSPIFFSFiles();
 
       // New
@@ -981,6 +732,9 @@ class WiFiManager
 
       if (!dnsServer)
         dnsServer = new AsyncDNSServer();
+  
+      assertConfig();
+      setState(config.isZero() ? WM_WIFI_CONFIG : WM_CONNECTING);
 
       //See https://stackoverflow.com/questions/39803135/c-unresolved-overloaded-function-type?rq=1
       if (server && dnsServer)
@@ -1017,10 +771,6 @@ class WiFiManager
           handlerConfigSet(request);
           setState(WM_CONNECTING);
         });
-        server->on("/code", HTTP_GET, [this](AsyncWebServerRequest * request) {
-          Serial.print(F("FETCH CODE"));
-          fetchUserCode();
-        });
 
         // Handle Web Server Events
         events->onConnect([this](AsyncEventSourceClient *client){
@@ -1033,15 +783,10 @@ class WiFiManager
 
       // If there is no saved config Data, stay in config mode forever until having config Data.
       // or SSID, PW, Server,Token ="nothing"
-      if (hadConfigData) {
-        configTimeout = millis() + CONFIG_TIMEOUT;
-        ESP_WML_LOGDEBUG3(F("s:millis() = "), millis(), F(", configTimeout = "), configTimeout);
-      } else {
+      if (config.isZero())
         configTimeout = 0;
-        ESP_WML_LOGDEBUG(F("s:configTimeout = 0"));
-      }
-
-      state = WM_WIFI_CONFIG;
+      else
+        configTimeout = millis() + CONFIG_TIMEOUT;
     }
 
 };

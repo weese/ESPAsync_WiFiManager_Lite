@@ -76,7 +76,7 @@ bool fileExist(char const *filename)
 
 //////////////////////////////////////////////
 
-bool saveFile(const char *buffer, size_t length, char const *filename)
+bool saveFile(uint8_t *buffer, size_t length, char const *filename)
 {
     if (FileFS.begin())
     {
@@ -93,19 +93,19 @@ bool saveFile(const char *buffer, size_t length, char const *filename)
 
 bool saveFile(String const &buffer, char const *filename)
 {
-    return saveFile((const char *)buffer.begin(), buffer.length(), filename);
+    return saveFile((uint8_t *)buffer.begin(), buffer.length(), filename);
 }
 
 //////////////////////////////////////////////
 
-bool loadFile(char *buffer, size_t length, char const *filename)
+bool loadFile(uint8_t *buffer, size_t length, char const *filename)
 {
     if (FileFS.begin())
     {
         File file = FileFS.open(filename, "r");
         if (file)
         {
-            if (file.readBytes(buffer, length) == length)
+            if (file.read(buffer, length) == length)
             {
                 file.close();
                 return true;
@@ -128,7 +128,7 @@ bool loadFile(String &buffer, char const *filename)
             size_t length = file.size();
             WMByteArray &b = static_cast<WMByteArray &>(buffer);
             b.setLength(length);
-            if (file.readBytes((char *)buffer.begin(), length) == length)
+            if (file.read((uint8_t *)buffer.begin(), length) == length)
             {
                 file.close();
                 return true;
