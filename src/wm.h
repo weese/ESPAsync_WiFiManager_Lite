@@ -46,6 +46,7 @@
 
 #define WM_HTTP_PORT     80
 #define WM_DNS_PORT      53
+#define WM_MULTI_WIFI false
 
 ///////////////////////////////////////////
 
@@ -54,6 +55,10 @@
 #undef min
 #undef max
 #include <algorithm>
+
+#ifndef WM_MULTI_WIFI
+#define WM_MULTI_WIFI true
+#endif
 
 #include <esp_wifi.h>
 #include "wm_debug.h"
@@ -113,10 +118,10 @@ MultiResetDetector* rd;
 
 ///////////////////////////////////////////
 
-const char PASS_OBFUSCATE_STRING[]        PROGMEM = "*******";
-const char FERMI_CLOUD_USERCODE_URL[]     PROGMEM = "http://fermicloud.spdns.de/auth/realms/fermi-cloud/protocol/openid-connect/auth/device";
+const char PASS_OBFUSCATE_STRING[]        PROGMEM = "********";
+const char FERMI_CLOUD_USERCODE_URL[]     PROGMEM = "https://fermicloud.spdns.de/auth/realms/fermi-cloud/protocol/openid-connect/auth/device";
 const char FERMI_CLOUD_USERCODE_PAYLOAD[] PROGMEM = "client_id=fermi-device";
-const char FERMI_CLOUD_TOKEN_URL[]        PROGMEM = "http://fermicloud.spdns.de/auth/realms/fermi-cloud/protocol/openid-connect/token";
+const char FERMI_CLOUD_TOKEN_URL[]        PROGMEM = "https://fermicloud.spdns.de/auth/realms/fermi-cloud/protocol/openid-connect/token";
 const char FERMI_CLOUD_TOKEN_PAYLOAD[]    PROGMEM = "client_id=fermi-device&scope=openid&grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=";
 
 #define MIN_WIFI_CHANNEL        1
@@ -185,8 +190,11 @@ class WiFiManager
       if (!hasToken()) return false;
       
       // 3. Connect Wifi
+#if WM_MULTI_WIFI
       if (!wmConnectWifi(wifiMulti, config, mode)) return false;
-      
+#else
+      if (WiFi.begin(config.getSSID(0), config.getPW(0)) != WL_CONNECTED) return false;
+#endif
       // 3. Connect to MQTT server
       if (!Particle.connect()) return false;
 
@@ -319,8 +327,11 @@ class WiFiManager
 
             ESP_WML_LOGERROR(F("r:WLost.ReconW"));
 
-            if (wmConnectWifiMulti(wifiMulti) == WL_CONNECTED)
-            {
+#if WM_MULTI_WIFI
+            if (wmConnectWifiMulti(wifiMulti) == WL_CONNECTED) {
+#else
+            if (WiFi.begin(config.getSSID(0), config.getPW(0)) == WL_CONNECTED) {
+#endif
               ESP_WML_LOGINFO(F("run: WiFi reconnected"));
             }
           }
@@ -328,7 +339,11 @@ class WiFiManager
 #else
           ESP_WML_LOGINFO(F("run: WiFi lost. Reconnect WiFi"));
 
+#if WM_MULTI_WIFI
           if (wmConnectWifiMulti(wifiMulti) == WL_CONNECTED) {
+#else
+          if (WiFi.begin(config.getSSID(0), config.getPW(0)) == WL_CONNECTED) {
+#endif
             ESP_WML_LOGINFO(F("run: WiFi reconnected"));
           }
 
@@ -423,7 +438,9 @@ class WiFiManager
 
 
   private:
+#if WM_MULTI_WIFI
     WiFiMulti wifiMulti;
+#endif
     AsyncWebServer *server = nullptr;
     AsyncEventSource *events = nullptr;
     AsyncDNSServer *dnsServer = nullptr;
@@ -454,32 +471,40 @@ class WiFiManager
     //////////////////////////////////////////////
 
     bool fetchUserCode() {
-      HTTPClient http;
-      bool result = false;
+      WiFiClientSecure client;
+      client.setCACert(fermiRootCACertificate);
+      {
+        // Add a scoping block for HTTPClient https to make sure it is destroyed before WiFiClientSecure client is 
+        HTTPClient https;
+        bool result = false;
 
-      http.setConnectTimeout(500);
-      http.setTimeout(500);
-      http.begin(FERMI_CLOUD_USERCODE_URL);
-      http.addHeader("Content-Type", "application/x-www-form-urlencoded", false, false);
+        https.setConnectTimeout(500);
+        https.setTimeout(500);
+        https.begin(client, FERMI_CLOUD_USERCODE_URL);
+        https.addHeader("Content-Type", "application/x-www-form-urlencoded", false, false);
 
-      int httpCode = http.POST(FERMI_CLOUD_USERCODE_PAYLOAD);
-      ESP_WML_LOGINFO1(F("s:DNS IP = "), WiFi.dnsIP(0).toString());
-      ESP_WML_LOGINFO1(F("s:Gateway IP = "), WiFi.gatewayIP().toString());
-      ESP_WML_LOGINFO1(F("s:Status code = "), httpCode);
-      if (httpCode == 200) {
-          StaticJsonDocument<200> filter;
-          filter["device_code"] = true;
-          filter["user_code"] = true;
-          StaticJsonDocument<200> doc;
-          DeserializationError error = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
-          if (!error) {
-              deviceCode = doc["device_code"].as<const char*>();
-              userCode = doc["user_code"].as<const char*>();
-              ESP_WML_LOGINFO1(F("s:User code = "), userCode.c_str());
-          }
+        int httpCode = https.POST(FERMI_CLOUD_USERCODE_PAYLOAD);
+        ESP_WML_LOGINFO1(F("s:DNS IP = "), WiFi.dnsIP(0).toString());
+        ESP_WML_LOGINFO1(F("s:Gateway IP = "), WiFi.gatewayIP().toString());
+        ESP_WML_LOGINFO1(F("s:Status code = "), httpCode);
+        if (httpCode == 200) {
+            StaticJsonDocument<200> filter;
+            filter["device_code"] = true;
+            filter["user_code"] = true;
+            StaticJsonDocument<200> doc;
+            DeserializationError error = deserializeJson(doc, https.getStream(), DeserializationOption::Filter(filter));
+            if (!error) {
+                deviceCode = doc["device_code"].as<const char*>();
+                userCode = doc["user_code"].as<const char*>();
+                ESP_WML_LOGINFO1(F("s:User code = "), userCode.c_str());
+                result = true;
+            }
+        } else {
+            ESP_WML_LOGINFO1(F("s:Error = "), https.errorToString(httpCode).c_str());
+        }
+        https.end();
+        return result;
       }
-      http.end();
-      return result;
     }
 
     void saveAs(String const &data, char const *filename)
@@ -507,38 +532,43 @@ class WiFiManager
     }
     
     bool fetchAccessToken() {
-      HTTPClient http;
-      bool result = false;
-      http.setConnectTimeout(500);
-      http.setTimeout(500);
-      http.begin(FERMI_CLOUD_TOKEN_URL);
-      http.addHeader("Content-Type", "application/x-www-form-urlencoded", false, false);
-      // int httpCode = http.POST((uint8_t *)FERMI_CLOUD_USERCODE_PAYLOAD, sizeof(FERMI_CLOUD_USERCODE_PAYLOAD) - 1);
-      int httpCode = http.POST(String(FERMI_CLOUD_TOKEN_PAYLOAD) + deviceCode);
-      ESP_WML_LOGINFO1(F("s:Status code = "), httpCode);
-      StaticJsonDocument<200> filter;
-      StaticJsonDocument<1000> doc;
-      if (httpCode == 200) {
-          filter["refresh_token"] = true;
-          DeserializationError error = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
-          if (!error) {
-              String refreshToken = doc["refresh_token"].as<const char*>();
-              ESP_WML_LOGINFO1(F("s:Refresh token = "), refreshToken.c_str());
-              saveToken(refreshToken);
-              result = true;
-          }
-      } else if (httpCode == 400) {
-          filter["error"] = true;
-          DeserializationError error = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
-          if (!error) {
-              if (strcmp(doc["error"].as<const char*>(), "expired_token") == 0) {
-                ESP_WML_LOGINFO(F("s:Token expired, request new one"));
-                fetchUserCode();
-              }
-          }
+      WiFiClientSecure client;
+      client.setCACert(fermiRootCACertificate);
+      {
+        // Add a scoping block for HTTPClient https to make sure it is destroyed before WiFiClientSecure client is 
+        HTTPClient https;
+        bool result = false;
+        https.setConnectTimeout(500);
+        https.setTimeout(500);
+        https.begin(client, FERMI_CLOUD_TOKEN_URL);
+        https.addHeader("Content-Type", "application/x-www-form-urlencoded", false, false);
+        // int httpCode = https.POST((uint8_t *)FERMI_CLOUD_USERCODE_PAYLOAD, sizeof(FERMI_CLOUD_USERCODE_PAYLOAD) - 1);
+        int httpCode = https.POST(String(FERMI_CLOUD_TOKEN_PAYLOAD) + deviceCode);
+        ESP_WML_LOGINFO1(F("s:Status code = "), httpCode);
+        StaticJsonDocument<200> filter;
+        StaticJsonDocument<1000> doc;
+        if (httpCode == 200) {
+            filter["refresh_token"] = true;
+            DeserializationError error = deserializeJson(doc, https.getStream(), DeserializationOption::Filter(filter));
+            if (!error) {
+                String refreshToken = doc["refresh_token"].as<const char*>();
+                ESP_WML_LOGINFO1(F("s:Refresh token = "), refreshToken.c_str());
+                saveToken(refreshToken);
+                result = true;
+            }
+        } else if (httpCode == 400) {
+            filter["error"] = true;
+            DeserializationError error = deserializeJson(doc, https.getStream(), DeserializationOption::Filter(filter));
+            if (!error) {
+                if (strcmp(doc["error"].as<const char*>(), "expired_token") == 0) {
+                  ESP_WML_LOGINFO(F("s:Token expired, request new one"));
+                  fetchUserCode();
+                }
+            }
+        }
+        https.end();
+        return result;
       }
-      http.end();
-      return result;
     }
 
     void createConfigJson(String& json)
@@ -645,6 +675,7 @@ class WiFiManager
 
     void setState(WMState newState) {
       Serial.println("setState: " + String(newState));
+      printStackTrace();
       if (this->state == newState)
         return;
       timeLastStateChange = millis();
@@ -655,8 +686,11 @@ class WiFiManager
         case WM_FETCH_CODE:
           break;
         case WM_CONNECTING:
-          // this->begin(WIFI_AP_STA);
+#if WM_MULTI_WIFI
           wmConnectWifi(wifiMulti, config, WIFI_AP_STA);
+#else
+          WiFi.begin(config.getSSID(0), config.getPW(0));
+#endif
           break;
         case WM_FETCH_TOKEN:
           events->send(this->userCode.c_str(), "c", timeLastStateChange, 1000);
@@ -682,8 +716,8 @@ class WiFiManager
           if (WiFi.status() == WL_CONNECTED)
             setState(hasToken() ? WM_READY : WM_FETCH_CODE);
           // abort after TIMEOUT_CONNECT_WIFI milliseconds and go back to Wifi config mode
-          if (curMillis - timeLastStateChange > TIMEOUT_CONNECT_WIFI)
-            setState(WM_WIFI_CONFIG);
+          // if (curMillis - timeLastStateChange > TIMEOUT_CONNECT_WIFI)
+          //   setState(WM_WIFI_CONFIG);
           break;
         case WM_FETCH_CODE:
           if (fetchUserCode())

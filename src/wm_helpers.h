@@ -4,6 +4,7 @@
 #define wm_helpers_h_
 
 #include <SPIFFS.h>
+#include "esp_debug_helpers.h"
 
 ///////////////////////////////////////////
 
@@ -115,6 +116,12 @@ void listSPIFFSFiles()
     file.close();
     file = root.openNextFile();
   }
+}
+
+//////////////////////////////////////////
+
+void printStackTrace() {
+    esp_backtrace_print(10); // Maximum depth of the backtrace
 }
 
 #endif // wm_helpers_h_
