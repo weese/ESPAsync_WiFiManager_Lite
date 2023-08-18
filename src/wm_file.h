@@ -127,6 +127,7 @@ bool loadFile(String &buffer, char const *filename)
         {
             size_t length = file.size();
             WMByteArray &b = static_cast<WMByteArray &>(buffer);
+            if (!b.reserve(length)) return false;
             b.setLength(length);
             if (file.read((uint8_t *)buffer.begin(), length) == length)
             {

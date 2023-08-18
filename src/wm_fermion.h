@@ -4,12 +4,18 @@
 #define wm_fermion_h_
 
 // #include <Ethernet.h>
+#include <esp_wifi.h>
+#include <ArduinoJson.h>
 #include "mqtt_client.h"
 #include "wm_file.h"
 #include "wm_wifi.h"
 
-#define WM_TOKEN_FILENAME "/wm_token.dat"
-#define WM_TOKEN_FILENAME_BACKUP "/wm_token.bak"
+#define WM_REFRESH_TOKEN_FILENAME "/wm_token.dat"
+#define WM_REFRESH_TOKEN_FILENAME_BACKUP "/wm_token.bak"
+
+const char FERMI_CLOUD_TOKEN_URL[]            PROGMEM = "https://fermicloud.spdns.de/auth/realms/fermi-cloud/protocol/openid-connect/token";
+const char FERMI_CLOUD_DEVICE_CODE_PAYLOAD[]  PROGMEM = "client_id=fermi-device&scope=openid&grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=";
+const char FERMI_CLOUD_REFRESH_PAYLOAD[]      PROGMEM = "client_id=fermi-device&grant_type=refresh_token&refresh_token=";
 
 //////////////////////////////////////////////
 
@@ -22,8 +28,17 @@ static System_t System;
 //////////////////////////////////////////////
 
 #define FERMI_CLOUD_FUNCTION_HANDLERS 10
-#define FERMI_CLOUD_MQTT_HOSTNAME "fermicloud.spdns.de"
+#define FERMI_CLOUD_MQTT_HOSTNAME "ws://fermicloud.spdns.de/mqtt"
 #define FERMI_CLOUD_MQTT_PORT 8083
+
+enum FetchAccessTokenResult {
+    FC_OK = 0,
+    FC_CODE_NOT_VERIFIED_YET,
+    FC_CODE_EXPIRED,
+    FC_INVALID_REFRESH_TOKEN,
+    FC_CANNOT_LOAD_REFRESH_TOKEN,
+    FC_INVALID_RESPONSE
+};
 
 // This is isrgrootx1.pem, the root Certificate Authority that signed 
 // the certifcate of the FermiCloud server https://fermicloud.spdns.de
@@ -91,44 +106,191 @@ struct Fermion
 {
     FunctionHandler handlers[FERMI_CLOUD_FUNCTION_HANDLERS];
     uint8_t handlerCount;
+    bool _gotDisconnected;
     esp_mqtt_client_handle_t mqttClient;
     String deviceID;
+    String accessToken;
 
     Fermion() : 
-        handlerCount(0), 
-        deviceID(wmHostname()) {}
+        handlerCount(0),
+        _gotDisconnected(false),
+        deviceID(wmHostname()),
+        mqttClient(NULL) {}
+    
+    ~Fermion() {
+        if (isConnected())
+            disconnect();
+    }
+
+    bool hasRefreshToken() {
+        return FileFS.exists(WM_REFRESH_TOKEN_FILENAME) || FileFS.exists(WM_REFRESH_TOKEN_FILENAME_BACKUP);
+    }
+
+    void saveAs(String const &data, char const *filename)
+    {
+        ESP_WML_LOGINFO1(F("Save file %s... "), filename);
+        File file = FileFS.open(filename, "w");
+        if (file)
+        {
+            file.write((uint8_t *)data.c_str(), data.length());
+            file.close();
+            ESP_WML_LOGINFO(F("OK"));
+        }
+        else
+            ESP_WML_LOGINFO(F("failed"));
+    }
+
+    void saveRefreshToken(String const &token)
+    {
+        saveAs(token, WM_REFRESH_TOKEN_FILENAME);
+        saveAs(token, WM_REFRESH_TOKEN_FILENAME_BACKUP);
+    }
+
+    void deleteRefreshToken() {
+        FileFS.remove(WM_REFRESH_TOKEN_FILENAME);
+        FileFS.remove(WM_REFRESH_TOKEN_FILENAME_BACKUP);
+    }
+    
+    FetchAccessTokenResult fetchAccessToken(const char* deviceCode = NULL) {
+      WiFiClientSecure client;
+      client.setCACert(fermiRootCACertificate);
+      {
+        // Add a scoping block for HTTPClient https to make sure it is destroyed before WiFiClientSecure client is 
+        HTTPClient https;
+        FetchAccessTokenResult result = FC_INVALID_RESPONSE;
+        https.setConnectTimeout(500);
+        https.setTimeout(500);
+        https.begin(client, FERMI_CLOUD_TOKEN_URL);
+        https.addHeader("Content-Type", "application/x-www-form-urlencoded", false, false);
+ 
+        int httpCode;
+        if (deviceCode && deviceCode[0] != '\0') {
+            ESP_WML_LOGINFO1(F("s:device code = "), String(FERMI_CLOUD_DEVICE_CODE_PAYLOAD) + deviceCode);
+
+            httpCode = https.POST(String(FERMI_CLOUD_DEVICE_CODE_PAYLOAD) + deviceCode);
+        } else {
+            String refreshToken;
+            if (!loadFile(refreshToken, WM_REFRESH_TOKEN_FILENAME) &&
+                !loadFile(refreshToken, WM_REFRESH_TOKEN_FILENAME_BACKUP)) 
+            {
+                ESP_WML_LOGERROR(F("s:Cannot load refresh token"));
+                return FC_CANNOT_LOAD_REFRESH_TOKEN;
+            }
+            httpCode = https.POST(String(FERMI_CLOUD_REFRESH_PAYLOAD) + refreshToken);
+        }
+
+        ESP_WML_LOGINFO1(F("s:Status code = "), httpCode);
+        StaticJsonDocument<200> filter;
+        StaticJsonDocument<2000> doc;
+        if (httpCode == 200) {
+            filter["access_token"] = true;
+            filter["refresh_token"] = true;
+            DeserializationError error = deserializeJson(doc, https.getStream(), DeserializationOption::Filter(filter));
+            if (!error) {
+                accessToken = doc["access_token"].as<const char*>();
+                String refreshToken = doc["refresh_token"].as<const char*>();
+                ESP_WML_LOGINFO1(F("s:Refresh token = "), refreshToken.c_str());
+                saveRefreshToken(refreshToken);
+                result = FC_OK;
+            } else {
+                ESP_WML_LOGINFO1(F("s:Deserialisation error: "), error.c_str());
+            }
+        } else if (httpCode == 400) {
+            filter["error"] = true;
+            filter["error_description"] = true;
+            DeserializationError error = deserializeJson(doc, https.getStream(), DeserializationOption::Filter(filter));
+            if (!error) {
+                const char *err = doc["error"].as<const char*>();
+                if (strcmp(err, "expired_token") == 0) {
+                  ESP_WML_LOGINFO(F("s:User code expired"));
+                  result = FC_CODE_EXPIRED;
+                } else if (strcmp(err, "authorization_pending") == 0)
+                  result = FC_CODE_NOT_VERIFIED_YET;
+                else if (strcmp(err, "invalid_grant") == 0) {
+                  result = FC_INVALID_REFRESH_TOKEN;
+                } else {
+                  ESP_WML_LOGINFO1(F("s:Got error: "), err);
+                  ESP_WML_LOGINFO1(F("s:Got error description: "), doc["error_description"].as<const char*>());
+                }
+            } else {
+                ESP_WML_LOGINFO1(F("s:Deserialisation error: "), error.c_str());
+            }
+        }
+        https.end();
+        return result;
+      }
+    }
+
+    bool isConnected() {
+        if (_gotDisconnected) {
+            esp_mqtt_client_destroy(mqttClient);
+            mqttClient = NULL;
+            _gotDisconnected = false;
+        }
+        return mqttClient != NULL;
+    }
 
     bool connect()
     {
-        String accessToken;
+        if (!isConnected()) {
+            ESP_WML_LOGINFO1(F("s:Access token: %s"), accessToken.c_str());
+            esp_mqtt_client_config_t mqtt_cfg = {
+                .event_handle = mqttHandler,
+                .uri = FERMI_CLOUD_MQTT_HOSTNAME,
+                .port = FERMI_CLOUD_MQTT_PORT,
+                .client_id = deviceID.c_str(),
+                .username = "tre@gmx.de",
+                .password = accessToken.c_str(),
+                .user_context = this,
+                .cert_pem = fermiRootCACertificate,
+            };
+            mqttClient = esp_mqtt_client_init(&mqtt_cfg);
+            if (!mqttClient) {
+                ESP_WML_LOGINFO(F("s:esp_mqtt_client_init() failed"));
+                return false;
+            }
+            ESP_WML_LOGINFO(F("s:esp_mqtt_client_init() ok."));
 
-        // 1. Try to load access token
-        if (!loadFile(accessToken, WM_TOKEN_FILENAME) &&
-            !loadFile(accessToken, WM_TOKEN_FILENAME_BACKUP)) return false;
-        
-        // 2. Try to connect to MQTT
-        esp_mqtt_client_config_t mqtt_cfg = {
-            .event_handle = mqttHandler,
-            .uri = FERMI_CLOUD_MQTT_HOSTNAME,
-            .port = FERMI_CLOUD_MQTT_PORT,
-            .client_id = deviceID.c_str(),
-            .username = "",
-            .password = accessToken.c_str(),
-            .user_context = this,
-        };
-        mqttClient = esp_mqtt_client_init(&mqtt_cfg);
-        if (!mqttClient)
-            return false;
-        
-        esp_mqtt_client_start(mqttClient);
-        return true;
+            esp_err_t err = esp_mqtt_client_start(mqttClient);
+            if (err != ESP_OK) {
+                esp_mqtt_client_destroy(mqttClient);
+                mqttClient = NULL;
+                ESP_WML_LOGINFO1(F("s:esp_mqtt_client_start() failed: "), err);
+                return false;
+            }
+            ESP_WML_LOGINFO(F("s:esp_mqtt_client_start() ok."));
+
+            return true;
+        }
+        return false;
     }
 
-    bool publish(const char *eventName, const char *eventData, PublishScopeEnum /*scope*/)
+    void heartBeat() {
+        if (isConnected()) {
+            int8_t rssi = WiFi.RSSI();
+            auto freeRam = ESP.getFreeHeap();
+            char data[100];
+            snprintf(data, sizeof(data), "{\"rssi\":%i,\"free_ram\":%i}", rssi, freeRam);
+            ESP_WML_LOGINFO1(F("s:heartBeat() = "), data);
+            int result = publish("fermion_heartbeat", data, PRIVATE);
+            ESP_WML_LOGINFO1(F("s:result = "), result);
+        }
+    }
+
+    void disconnect() {
+        if (isConnected()) {
+            esp_mqtt_client_stop(mqttClient);
+            esp_mqtt_client_disconnect(mqttClient);
+            esp_mqtt_client_destroy(mqttClient);
+        }
+        mqttClient = NULL;
+    }
+
+    int publish(const char *eventName, const char *eventData, PublishScopeEnum /*scope*/)
     {
         char topic[300];
         _getEventTopic(topic, sizeof(topic), eventName);
-        return esp_mqtt_client_publish(mqttClient, topic, eventData, 0, 0, 0) >= 0;
+        return esp_mqtt_client_publish(mqttClient, "users/mqtt_user/test3", eventData, 0, 0, 0);
     }
 
     bool subscribe(const char *eventName, EventHandler handler, FermionScopeEnum scope)
@@ -189,6 +351,8 @@ struct Fermion
 
         case MQTT_EVENT_DISCONNECTED:
             Serial.println("MQTT_EVENT_DISCONNECTED");
+            fermion->_gotDisconnected = true;
+            fermion->accessToken.clear();
             break;
 
         case MQTT_EVENT_SUBSCRIBED:
@@ -227,7 +391,8 @@ private:
     }
 
     void _getEventTopic(char *buffer, size_t length, const char *eventName) {
-        strncpy(buffer, "devices/events", length);
+        strncpy(buffer, "devices/events/", length);
+        strncat(buffer, eventName, length);
     }
 };
 
