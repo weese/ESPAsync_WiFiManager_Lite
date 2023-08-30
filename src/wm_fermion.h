@@ -28,8 +28,7 @@ static System_t System;
 //////////////////////////////////////////////
 
 #define FERMI_CLOUD_FUNCTION_HANDLERS 10
-#define FERMI_CLOUD_MQTT_HOSTNAME "ws://fermicloud.spdns.de/mqtt"
-#define FERMI_CLOUD_MQTT_PORT 8083
+#define FERMI_CLOUD_MQTT_URI "mqtts://fermicloud.spdns.de:8883"
 
 enum FetchAccessTokenResult {
     FC_OK = 0,
@@ -107,6 +106,7 @@ struct Fermion
     FunctionHandler handlers[FERMI_CLOUD_FUNCTION_HANDLERS];
     uint8_t handlerCount;
     bool _gotDisconnected;
+    bool _isConnected;
     esp_mqtt_client_handle_t mqttClient;
     String deviceID;
     String accessToken;
@@ -114,8 +114,18 @@ struct Fermion
     Fermion() : 
         handlerCount(0),
         _gotDisconnected(false),
+        _isConnected(false),
         deviceID(wmHostname()),
-        mqttClient(NULL) {}
+        mqttClient(NULL) 
+    {
+        // esp_log_level_set("*", ESP_LOG_INFO);
+        // esp_log_level_set("esp-tls", ESP_LOG_VERBOSE);
+        // esp_log_level_set("MQTT_CLIENT", ESP_LOG_VERBOSE);
+        // esp_log_level_set("MQTT_EXAMPLE", ESP_LOG_VERBOSE);
+        // esp_log_level_set("TRANSPORT_BASE", ESP_LOG_VERBOSE);
+        // esp_log_level_set("TRANSPORT", ESP_LOG_VERBOSE);
+        // esp_log_level_set("OUTBOX", ESP_LOG_VERBOSE);
+    }
     
     ~Fermion() {
         if (isConnected())
@@ -151,15 +161,15 @@ struct Fermion
         FileFS.remove(WM_REFRESH_TOKEN_FILENAME_BACKUP);
     }
     
-    FetchAccessTokenResult fetchAccessToken(const char* deviceCode = NULL) {
+    FetchAccessTokenResult fetchAccessToken(const char* deviceCode = NULL, long timeout = 5000) {
       WiFiClientSecure client;
       client.setCACert(fermiRootCACertificate);
       {
         // Add a scoping block for HTTPClient https to make sure it is destroyed before WiFiClientSecure client is 
         HTTPClient https;
         FetchAccessTokenResult result = FC_INVALID_RESPONSE;
-        https.setConnectTimeout(500);
-        https.setTimeout(500);
+        https.setConnectTimeout(timeout);
+        https.setTimeout(timeout);
         https.begin(client, FERMI_CLOUD_TOKEN_URL);
         https.addHeader("Content-Type", "application/x-www-form-urlencoded", false, false);
  
@@ -181,7 +191,7 @@ struct Fermion
 
         ESP_WML_LOGINFO1(F("s:Status code = "), httpCode);
         StaticJsonDocument<200> filter;
-        StaticJsonDocument<2000> doc;
+        DynamicJsonDocument doc(4000);
         if (httpCode == 200) {
             filter["access_token"] = true;
             filter["refresh_token"] = true;
@@ -226,23 +236,24 @@ struct Fermion
             esp_mqtt_client_destroy(mqttClient);
             mqttClient = NULL;
             _gotDisconnected = false;
+            _isConnected = false;
         }
-        return mqttClient != NULL;
+        return mqttClient != NULL && _isConnected;
     }
 
     bool connect()
     {
         if (!isConnected()) {
-            ESP_WML_LOGINFO1(F("s:Access token: %s"), accessToken.c_str());
+            // ESP_WML_LOGINFO1(F("s:Access token: %s"), accessToken.c_str());
+            // ESP_WML_LOGINFO1(F("s:Heap free: %s"), ESP.getFreeHeap());
             esp_mqtt_client_config_t mqtt_cfg = {
-                .event_handle = mqttHandler,
-                .uri = FERMI_CLOUD_MQTT_HOSTNAME,
-                .port = FERMI_CLOUD_MQTT_PORT,
-                .client_id = deviceID.c_str(),
-                .username = "tre@gmx.de",
+                .uri = FERMI_CLOUD_MQTT_URI,
+                // .client_id = deviceID.c_str(),
+                // .username = "",
                 .password = accessToken.c_str(),
-                .user_context = this,
                 .cert_pem = fermiRootCACertificate,
+                .protocol_ver = MQTT_PROTOCOL_V_3_1,
+                .out_buffer_size = 2048,
             };
             mqttClient = esp_mqtt_client_init(&mqtt_cfg);
             if (!mqttClient) {
@@ -251,7 +262,15 @@ struct Fermion
             }
             ESP_WML_LOGINFO(F("s:esp_mqtt_client_init() ok."));
 
-            esp_err_t err = esp_mqtt_client_start(mqttClient);
+            esp_err_t err = esp_mqtt_client_register_event(mqttClient, MQTT_EVENT_ANY, mqttHandlerStatic, this);
+            if (err != ESP_OK) {
+                esp_mqtt_client_destroy(mqttClient);
+                mqttClient = NULL;
+                ESP_WML_LOGINFO1(F("s:esp_mqtt_client_register_event() failed: "), err);
+                return false;
+            }
+
+            err = esp_mqtt_client_start(mqttClient);
             if (err != ESP_OK) {
                 esp_mqtt_client_destroy(mqttClient);
                 mqttClient = NULL;
@@ -334,25 +353,33 @@ struct Fermion
         }
     }
 
-    static esp_err_t mqttHandler(esp_mqtt_event_handle_t event)
-    {
-        esp_mqtt_client_handle_t client = event->client;
-        Fermion *fermion = (Fermion *)(event->user_context);
+    static void mqttHandlerStatic(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
+        ((Fermion *)handler_args)->mqttHandler(base, event_id, event_data);
+    }
 
-        switch (event->event_id)
+    esp_err_t mqttHandler(esp_event_base_t base, int32_t event_id, void *event_data)
+    {
+        Serial.printf("Event dispatched from event loop base=%s, event_id=%d", base, event_id);
+        esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)event_data;
+        esp_mqtt_client_handle_t client = event->client;
+        int msg_id;
+
+        switch (event_id)
         {
         case MQTT_EVENT_CONNECTED:
             Serial.println("MQTT_EVENT_CONNECTED");
+            _isConnected = true;
             // Subscribe to all handler topics
-            for (uint8_t i = 0; i < fermion->handlerCount; i++)
-                esp_mqtt_client_subscribe(client, fermion->handlers[i].topic.c_str(), 0);
+            for (uint8_t i = 0; i < handlerCount; i++)
+                esp_mqtt_client_subscribe(client, handlers[i].topic.c_str(), 0);
             
             break;
 
         case MQTT_EVENT_DISCONNECTED:
             Serial.println("MQTT_EVENT_DISCONNECTED");
-            fermion->_gotDisconnected = true;
-            fermion->accessToken.clear();
+            _isConnected = false;
+            _gotDisconnected = true;
+            // fermion->accessToken.clear();
             break;
 
         case MQTT_EVENT_SUBSCRIBED:
@@ -371,7 +398,7 @@ struct Fermion
             Serial.println("MQTT_EVENT_DATA");
             Serial.printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
             Serial.printf("DATA=%.*s\r\n", event->data_len, event->data);
-            fermion->handlerCallback(event->topic, event->data, event->data_len);
+            handlerCallback(event->topic, event->data, event->data_len);
             break;
 
         case MQTT_EVENT_ERROR:

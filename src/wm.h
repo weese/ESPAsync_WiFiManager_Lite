@@ -155,6 +155,14 @@ enum WMState {
   WM_FETCH_TOKEN,
 };
 
+const long wmStateCheckIntervals[] = { 
+  10000,
+  2000,
+  5000,
+  3000,
+  6000
+};
+
 //////////////////////////////////////////
 
 class WiFiManager
@@ -269,11 +277,6 @@ class WiFiManager
     void run()
     {
       static int retryTimes = 0;
-
-      // Lost connection in running. Give chance to reconfig.
-      // Check WiFi status every 5s and update status
-      // Check twice to be sure wifi disconnected is real
-#define WIFI_STATUS_CHECK_INTERVAL    5000L
 
       uint32_t curMillis = millis();
 
@@ -468,7 +471,7 @@ class WiFiManager
 
     //////////////////////////////////////////////
 
-    bool fetchUserCode() {
+    bool fetchUserCode(long timeout = 5000) {
       WiFiClientSecure client;
       client.setCACert(fermiRootCACertificate);
       {
@@ -476,8 +479,8 @@ class WiFiManager
         HTTPClient https;
         bool result = false;
 
-        https.setConnectTimeout(500);
-        https.setTimeout(500);
+        https.setConnectTimeout(timeout);
+        https.setTimeout(timeout);
         https.begin(client, FERMI_CLOUD_USERCODE_URL);
         https.addHeader("Content-Type", "application/x-www-form-urlencoded", false, false);
 
@@ -625,7 +628,7 @@ class WiFiManager
       if (this->state == newState)
         return;
       timeLastStateChange = millis();
-      events->send(String(newState).c_str(), "s", timeLastStateChange, 1000);
+      if (events) events->send(String(newState).c_str(), "s", timeLastStateChange, 1000);
       switch (newState) {
         case WM_READY:
         case WM_WIFI_CONFIG:
@@ -639,7 +642,7 @@ class WiFiManager
 #endif
           break;
         case WM_FETCH_TOKEN:
-          events->send(this->userCode.c_str(), "c", timeLastStateChange, 1000);
+          if (events) events->send(this->userCode.c_str(), "c", timeLastStateChange, 1000);
           break;
       }
       this->state = newState;
@@ -648,7 +651,7 @@ class WiFiManager
 
     void loopState() {
       unsigned long curMillis = millis();
-      if (curMillis - timeLastStateCheck < WIFI_STATUS_CHECK_INTERVAL)
+      if (curMillis - timeLastStateCheck < wmStateCheckIntervals[this->state])
         return;
       timeLastStateCheck = curMillis;
 
@@ -675,11 +678,11 @@ class WiFiManager
           //   setState(WM_WIFI_CONFIG);
           break;
         case WM_FETCH_CODE:
-          if (fetchUserCode())
+          if (fetchUserCode(wmStateCheckIntervals[this->state] - 200))
             setState(WM_FETCH_TOKEN);
           break;
         case WM_FETCH_TOKEN:
-          FetchAccessTokenResult error = Particle.fetchAccessToken(deviceCode.c_str());
+          FetchAccessTokenResult error = Particle.fetchAccessToken(deviceCode.c_str(), wmStateCheckIntervals[this->state] - 200);
           switch (error) {
             case FC_OK:
               setState(WM_READY);
@@ -693,8 +696,7 @@ class WiFiManager
       }
     }
 
-    void startConfigurationMode()
-    {
+    void openPortal() {
       configTimeout = 0;  // To allow user input in CP
       WiFiNetworksFound = wmScanWifiNetworks(&indices);
 
@@ -731,9 +733,6 @@ class WiFiManager
       if (!dnsServer)
         dnsServer = new AsyncDNSServer();
   
-      assertConfig();
-      setState(config.isZero() ? WM_WIFI_CONFIG : WM_CONNECTING);
-
       //See https://stackoverflow.com/questions/39803135/c-unresolved-overloaded-function-type?rq=1
       if (server && dnsServer)
       {
@@ -778,6 +777,28 @@ class WiFiManager
         server->addHandler(events);
         server->begin();
       }
+    }
+
+    void closePortal() {
+        if (dnsServer) {
+          dnsServer->stop();
+          delete dnsServer;
+          dnsServer = nullptr;
+        }
+
+        if (server) {
+          server->end();
+          delete server;
+          server = nullptr;
+        }
+    }
+
+    void startConfigurationMode()
+    {
+      openPortal();
+      
+      assertConfig();
+      setState(config.isZero() ? WM_WIFI_CONFIG : WM_CONNECTING);
 
       // If there is no saved config Data, stay in config mode forever until having config Data.
       // or SSID, PW, Server,Token ="nothing"
