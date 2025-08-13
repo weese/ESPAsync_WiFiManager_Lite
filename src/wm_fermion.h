@@ -9,13 +9,16 @@
 #include "mqtt_client.h"
 #include "wm_file.h"
 #include "wm_wifi.h"
+#include "wm_flags.h"
 
 #define WM_REFRESH_TOKEN_FILENAME "/wm_token.dat"
 #define WM_REFRESH_TOKEN_FILENAME_BACKUP "/wm_token.bak"
 
-const char FERMI_CLOUD_TOKEN_URL[]            PROGMEM = "https://fermicloud.spdns.de/auth/realms/fermi-cloud/protocol/openid-connect/token";
+const char FERMI_CLOUD_TOKEN_URL[]            PROGMEM = "https://fermicloud.dev/auth/realms/fermi-cloud/protocol/openid-connect/token";
 const char FERMI_CLOUD_DEVICE_CODE_PAYLOAD[]  PROGMEM = "client_id=fermi-device&scope=openid&grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=";
 const char FERMI_CLOUD_REFRESH_PAYLOAD[]      PROGMEM = "client_id=fermi-device&grant_type=refresh_token&refresh_token=";
+#define FERMI_VERSION "1.0.0"
+#define FERMI_DEVICE "ESP32"
 
 //////////////////////////////////////////////
 
@@ -28,7 +31,7 @@ static System_t System;
 //////////////////////////////////////////////
 
 #define FERMI_CLOUD_FUNCTION_HANDLERS 10
-#define FERMI_CLOUD_MQTT_URI "mqtts://fermicloud.spdns.de:8883"
+#define FERMI_CLOUD_MQTT_URI "mqtts://fermicloud.dev:8883"
 
 enum FetchAccessTokenResult {
     FC_OK = 0,
@@ -40,7 +43,7 @@ enum FetchAccessTokenResult {
 };
 
 // This is isrgrootx1.pem, the root Certificate Authority that signed 
-// the certifcate of the FermiCloud server https://fermicloud.spdns.de
+// the certifcate of the FermiCloud server https://fermicloud.dev
 // This certificate is valid until 04/06/2035, 18:04:38 GMT+7
 const char* fermiRootCACertificate = \
 "-----BEGIN CERTIFICATE-----\n" \
@@ -79,13 +82,23 @@ typedef enum
 {
     MY_DEVICES,
     ALL_DEVICES
-} FermionScopeEnum;
+} SubscribeScopeEnum;
 
-typedef enum
-{
-    PRIVATE,
-    PUBLIC
-} PublishScopeEnum;
+struct PublishFlagType; // Tag type for Particle.publish() flags
+typedef particle::Flags<PublishFlagType, uint8_t> PublishFlags;
+typedef PublishFlags::FlagType PublishFlag;
+
+const uint32_t PUBLISH_EVENT_FLAG_PUBLIC = 0x0;
+const uint32_t PUBLISH_EVENT_FLAG_PRIVATE = 0x1;
+const uint32_t PUBLISH_EVENT_FLAG_NO_ACK = 0x2;
+const uint32_t PUBLISH_EVENT_FLAG_WITH_ACK = 0x8;
+const uint32_t PUBLISH_EVENT_FLAG_RETAIN = 0xa;
+
+const PublishFlag PUBLIC(PUBLISH_EVENT_FLAG_PUBLIC);
+const PublishFlag PRIVATE(PUBLISH_EVENT_FLAG_PRIVATE);
+const PublishFlag NO_ACK(PUBLISH_EVENT_FLAG_NO_ACK);
+const PublishFlag WITH_ACK(PUBLISH_EVENT_FLAG_WITH_ACK);
+const PublishFlag WITH_RETAIN(PUBLISH_EVENT_FLAG_RETAIN);
 
 typedef void (*EventHandler)(const char *event_name, const char *data);
 typedef void (*EventHandlerWithData)(void *handler_data, const char *event_name, const char *data);
@@ -284,6 +297,14 @@ struct Fermion
         return false;
     }
 
+    void hello() {
+        if (isConnected()) {
+            int result = publish("fermion_hello", 
+                "{\"version\":\"" FERMI_VERSION "\"" \
+                ",\"device\":\"" FERMI_DEVICE "\"}", PRIVATE | WITH_RETAIN);
+        }
+    }
+
     void heartBeat() {
         if (isConnected()) {
             int8_t rssi = WiFi.RSSI();
@@ -305,14 +326,14 @@ struct Fermion
         mqttClient = NULL;
     }
 
-    int publish(const char *eventName, const char *eventData, PublishScopeEnum /*scope*/)
+    int publish(const char *eventName, const char *eventData, PublishFlags flags)
     {
         char topic[300];
         _getEventTopic(topic, sizeof(topic), eventName);
-        return esp_mqtt_client_publish(mqttClient, "users/mqtt_user/test3", eventData, 0, 0, 0);
+        return esp_mqtt_client_publish(mqttClient, "users/mqtt_user/test3", eventData, 0, 0, flags & WITH_RETAIN ? 1 : 0);
     }
 
-    bool subscribe(const char *eventName, EventHandler handler, FermionScopeEnum scope)
+    bool subscribe(const char *eventName, EventHandler handler, SubscribeScopeEnum scope)
     {
         char topic[300];
         _getEventTopic(topic, sizeof(topic), eventName);
@@ -372,6 +393,7 @@ struct Fermion
             // Subscribe to all handler topics
             for (uint8_t i = 0; i < handlerCount; i++)
                 esp_mqtt_client_subscribe(client, handlers[i].topic.c_str(), 0);
+            hello();
             
             break;
 
@@ -411,15 +433,17 @@ struct Fermion
 private:
 
     void _getDeviceTopic(char *buffer, size_t length, const char *eventName) {
-        strncpy(buffer, "devices/", length);
-        strncat(buffer, deviceID.c_str(), length);
-        strncat(buffer, "/", length);
-        strncat(buffer, eventName, length);
+        strncpy(buffer, "devices/", length - 1);
+        strncat(buffer, deviceID.c_str(), length - 1);
+        strncat(buffer, "/", length - 1);
+        strncat(buffer, eventName, length - 1);
+        buffer[length - 1] = '\0'; // Ensure null-terminated
     }
 
     void _getEventTopic(char *buffer, size_t length, const char *eventName) {
-        strncpy(buffer, "devices/events/", length);
-        strncat(buffer, eventName, length);
+        strncpy(buffer, "devices/events/", length - 1);
+        strncat(buffer, eventName, length - 1);
+        buffer[length - 1] = '\0'; // Ensure null-terminated
     }
 };
 

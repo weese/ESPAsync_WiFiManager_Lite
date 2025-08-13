@@ -119,7 +119,7 @@ MultiResetDetector* rd;
 ///////////////////////////////////////////
 
 const char PASS_OBFUSCATE_STRING[]            PROGMEM = "********";
-const char FERMI_CLOUD_USERCODE_URL[]         PROGMEM = "https://fermicloud.spdns.de/auth/realms/fermi-cloud/protocol/openid-connect/auth/device";
+const char FERMI_CLOUD_USERCODE_URL[]         PROGMEM = "https://fermicloud.dev/auth/realms/fermi-cloud/protocol/openid-connect/auth/device";
 const char FERMI_CLOUD_USERCODE_PAYLOAD[]     PROGMEM = "client_id=fermi-device";
 
 #define MIN_WIFI_CHANNEL        1
