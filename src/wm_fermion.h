@@ -102,6 +102,7 @@ const PublishFlag WITH_RETAIN(PUBLISH_EVENT_FLAG_RETAIN);
 
 typedef void (*EventHandler)(const char *event_name, const char *data);
 typedef void (*EventHandlerWithData)(void *handler_data, const char *event_name, const char *data);
+typedef int (*user_function_int_str_t)(String);
 
 struct FunctionHandler
 {
@@ -114,22 +115,43 @@ struct FunctionHandler
     void *data;
 };
 
+struct CloudFunctionHandler
+{
+    user_function_int_str_t func;
+    String funcKey;
+};
+
+// Structure for function request/response
+struct FunctionRequest {
+    uint32_t requestId;
+    String parameters;
+};
+
+struct FunctionResponse {
+    uint32_t requestId;
+    int result;
+};
+
 struct Fermion
 {
     FunctionHandler handlers[FERMI_CLOUD_FUNCTION_HANDLERS];
+    CloudFunctionHandler functionHandlers[FERMI_CLOUD_FUNCTION_HANDLERS];
     uint8_t handlerCount;
+    uint8_t functionHandlerCount;
     bool _gotDisconnected;
     bool _isConnected;
     esp_mqtt_client_handle_t mqttClient;
     String deviceID;
     String accessToken;
 
+
     Fermion() : 
         handlerCount(0),
+        functionHandlerCount(0),
         _gotDisconnected(false),
         _isConnected(false),
         deviceID(wmHostname()),
-        mqttClient(NULL) 
+        mqttClient(NULL)
     {
         // esp_log_level_set("*", ESP_LOG_INFO);
         // esp_log_level_set("esp-tls", ESP_LOG_VERBOSE);
@@ -330,7 +352,7 @@ struct Fermion
     {
         char topic[300];
         _getEventTopic(topic, sizeof(topic), eventName);
-        return esp_mqtt_client_publish(mqttClient, "users/mqtt_user/test3", eventData, 0, 0, flags & WITH_RETAIN ? 1 : 0);
+        return esp_mqtt_client_publish(mqttClient, topic, eventData, 0, 0, flags & WITH_RETAIN ? 1 : 0);
     }
 
     bool subscribe(const char *eventName, EventHandler handler, SubscribeScopeEnum scope)
@@ -355,6 +377,86 @@ struct Fermion
         return esp_mqtt_client_unsubscribe(mqttClient, topic) >= 0;
     }
 
+    // Function registration methods
+    bool function(const char *funcKey, user_function_int_str_t func)
+    {
+        // Check if function with same name already exists
+        for (uint8_t i = 0; i < functionHandlerCount; i++) {
+            if (functionHandlers[i].funcKey == funcKey) {
+                // Replace existing function
+                functionHandlers[i].func = func;
+                ESP_WML_LOGINFO1(F("s:Function replaced: "), funcKey);
+                return true;
+            }
+        }
+        
+        // Add new function if we have space
+        if (functionHandlerCount >= FERMI_CLOUD_FUNCTION_HANDLERS) {
+            ESP_WML_LOGERROR(F("s:Too many function handlers registered"));
+            return false;
+        }
+        
+        functionHandlers[functionHandlerCount] = CloudFunctionHandler{
+            .func = func,
+            .funcKey = String(funcKey)
+        };
+        functionHandlerCount++;
+        
+        // Subscribe to function topic
+        char topic[300];
+        _getFunctionTopic(topic, sizeof(topic), funcKey);
+        if (isConnected()) {
+            esp_mqtt_client_subscribe(mqttClient, topic, 0);
+        }
+        
+        ESP_WML_LOGINFO1(F("s:Function registered: "), funcKey);
+        return true;
+    }
+
+    template<typename T>
+    bool function(const T &name, user_function_int_str_t func)
+    {
+        return function(name, func);
+    }
+
+    // Remove/unregister a function
+    bool removeFunction(const char *funcKey)
+    {
+        for (uint8_t i = 0; i < functionHandlerCount; i++) {
+            if (functionHandlers[i].funcKey == funcKey) {
+                // Unsubscribe from function topic
+                char topic[300];
+                _getFunctionTopic(topic, sizeof(topic), funcKey);
+                if (isConnected()) {
+                    esp_mqtt_client_unsubscribe(mqttClient, topic);
+                }
+                
+                // Remove function by shifting remaining functions
+                for (uint8_t j = i; j < functionHandlerCount - 1; j++) {
+                    functionHandlers[j] = functionHandlers[j + 1];
+                }
+                functionHandlerCount--;
+                
+                ESP_WML_LOGINFO1(F("s:Function removed: "), funcKey);
+                return true;
+            }
+        }
+        
+        ESP_WML_LOGINFO1(F("s:Function not found for removal: "), funcKey);
+        return false;
+    }
+
+    // Check if a function is registered
+    bool hasFunction(const char *funcKey)
+    {
+        for (uint8_t i = 0; i < functionHandlerCount; i++) {
+            if (functionHandlers[i].funcKey == funcKey) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // bool subscribe(System.deviceID() + "/" PREFIX_WIDGET, handlerWidget, MY_DEVICES);
 
     // Particle.function("notify", handlerNotificationFunction);
@@ -372,6 +474,63 @@ struct Fermion
                     handler.func(topic, payload);
             }
         }
+    }
+
+    bool functionCallback(char *topic, const char *payload, unsigned int length)
+    {
+        for (uint8_t i = 0; i < functionHandlerCount; i++)
+        {
+            CloudFunctionHandler &handler = functionHandlers[i];
+            
+            if (_compareFunctionTopic(topic, handler.funcKey.c_str()))
+            {
+                // Parse the request payload
+                String payloadStr(payload, length);
+                FunctionRequest request;
+                FunctionResponse response;
+                
+                // Try to parse as JSON first
+                StaticJsonDocument<512> doc;
+                DeserializationError error = deserializeJson(doc, payloadStr);
+                
+                if (!error) {
+                    // JSON format: {"i": 123, "p": "param_value"}
+                    request.requestId = doc["i"] | 0;
+                    request.parameters = doc["p"] | payloadStr; // fallback to raw payload
+                } else {
+                    // Simple string format (backward compatibility)
+                    request.requestId = millis(); // generate simple ID
+                    request.parameters = payloadStr;
+                }
+                
+                // Execute the function
+                int result = handler.func(request.parameters);
+                
+                // Prepare response
+                response.requestId = request.requestId;
+                response.result = result;
+                
+                // Send function result back
+                char responseTopic[300];
+                snprintf(responseTopic, sizeof(responseTopic), "users/mqtt_user/devices/%s/functions/%s/result", deviceID.c_str(), handler.funcKey.c_str());
+                
+                // Create JSON response
+                StaticJsonDocument<256> responseDoc;
+                responseDoc["i"] = response.requestId;
+                responseDoc["r"] = response.result;
+                
+                String responseJson;
+                serializeJson(responseDoc, responseJson);
+                
+                esp_mqtt_client_publish(mqttClient, responseTopic, responseJson.c_str(), 0, 0, 0);
+                
+                ESP_WML_LOGINFO1(F("s:Function called: "), handler.funcKey.c_str());
+                ESP_WML_LOGINFO1(F("s:Request ID: "), request.requestId);
+                ESP_WML_LOGINFO1(F("s:Function result: "), result);
+                return true;
+            }
+        }
+        return false;
     }
 
     static void mqttHandlerStatic(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
@@ -393,6 +552,12 @@ struct Fermion
             // Subscribe to all handler topics
             for (uint8_t i = 0; i < handlerCount; i++)
                 esp_mqtt_client_subscribe(client, handlers[i].topic.c_str(), 0);
+            // Subscribe to all function topics
+            for (uint8_t i = 0; i < functionHandlerCount; i++) {
+                char topic[300];
+                _getFunctionTopic(topic, sizeof(topic), functionHandlers[i].funcKey.c_str());
+                esp_mqtt_client_subscribe(client, topic, 0);
+            }
             hello();
             
             break;
@@ -420,7 +585,14 @@ struct Fermion
             Serial.println("MQTT_EVENT_DATA");
             Serial.printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
             Serial.printf("DATA=%.*s\r\n", event->data_len, event->data);
-            handlerCallback(event->topic, event->data, event->data_len);
+            
+            // Check if this is a function call
+            if (functionCallback(event->topic, event->data, event->data_len)) {
+                // Function was handled
+            } else {
+                // Handle as regular event
+                handlerCallback(event->topic, event->data, event->data_len);
+            }
             break;
 
         case MQTT_EVENT_ERROR:
@@ -433,7 +605,7 @@ struct Fermion
 private:
 
     void _getDeviceTopic(char *buffer, size_t length, const char *eventName) {
-        strncpy(buffer, "devices/", length - 1);
+        strncpy(buffer, "users/mqtt_user/devices/", length - 1);
         strncat(buffer, deviceID.c_str(), length - 1);
         strncat(buffer, "/", length - 1);
         strncat(buffer, eventName, length - 1);
@@ -441,9 +613,27 @@ private:
     }
 
     void _getEventTopic(char *buffer, size_t length, const char *eventName) {
-        strncpy(buffer, "devices/events/", length - 1);
+        strncpy(buffer, "users/mqtt_user/devices/", length - 1);
+        strncat(buffer, deviceID.c_str(), length - 1);
+        strncat(buffer, "/events/", length - 1);
         strncat(buffer, eventName, length - 1);
         buffer[length - 1] = '\0'; // Ensure null-terminated
+    }
+
+    void _getFunctionTopic(char *buffer, size_t length, const char *funcName) {
+        strncpy(buffer, "users/mqtt_user/devices/", length - 1);
+        strncat(buffer, deviceID.c_str(), length - 1);
+        strncat(buffer, "/functions/", length - 1);
+        strncat(buffer, funcName, length - 1);
+        buffer[length - 1] = '\0'; // Ensure null-terminated
+    }
+
+    // Compare a topic with a function name without generating the expected topic
+    bool _compareFunctionTopic(const char *topic, const char *funcName) {
+        return strncmp(topic, "users/mqtt_user/devices/", 28) == 0 &&
+               strncmp(topic + 28, deviceID.c_str(), deviceID.length()) == 0 &&
+               strncmp(topic + 28 + deviceID.length(), "/functions/", 11) == 0 &&
+               strncmp(topic + 28 + deviceID.length() + 11, funcName, strlen(funcName)) == 0;
     }
 };
 
