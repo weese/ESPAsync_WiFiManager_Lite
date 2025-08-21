@@ -120,7 +120,7 @@ MultiResetDetector* rd;
 
 const char PASS_OBFUSCATE_STRING[]            PROGMEM = "********";
 const char FERMI_CLOUD_USERCODE_URL[]         PROGMEM = "https://fermicloud.dev/auth/realms/fermi-cloud/protocol/openid-connect/auth/device";
-const char FERMI_CLOUD_USERCODE_PAYLOAD[]     PROGMEM = "client_id=fermi-device&scope=openid";
+const char FERMI_CLOUD_USERCODE_PAYLOAD[]     PROGMEM = "client_id=fermi-device&scope=openid offline_access";
 
 #define MIN_WIFI_CHANNEL        1
 #define MAX_WIFI_CHANNEL        11    // Channel 13 is flaky, because of bad number 13 ;-)
