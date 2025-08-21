@@ -14,9 +14,10 @@
 #define WM_REFRESH_TOKEN_FILENAME "/wm_token.dat"
 #define WM_REFRESH_TOKEN_FILENAME_BACKUP "/wm_token.bak"
 
-const char FERMI_CLOUD_TOKEN_URL[]            PROGMEM = "https://fermicloud.dev/auth/realms/fermi-cloud/protocol/openid-connect/token";
-const char FERMI_CLOUD_DEVICE_CODE_PAYLOAD[]  PROGMEM = "client_id=fermi-device&scope=openid&grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=";
-const char FERMI_CLOUD_REFRESH_PAYLOAD[]      PROGMEM = "client_id=fermi-device&grant_type=refresh_token&refresh_token=";
+const char* FERMI_CLOUD_TOKEN_URL            PROGMEM = "https://fermicloud.dev/auth/realms/fermi-cloud/protocol/openid-connect/token";
+const char* FERMI_CLOUD_USERINFO_URL         PROGMEM = "https://fermicloud.dev/auth/realms/fermi-cloud/protocol/openid-connect/userinfo";
+const char* FERMI_CLOUD_DEVICE_CODE_PAYLOAD  PROGMEM = "client_id=fermi-device&scope=openid&grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=";
+const char* FERMI_CLOUD_REFRESH_PAYLOAD      PROGMEM = "client_id=fermi-device&grant_type=refresh_token&refresh_token=";
 #define FERMI_VERSION "1.0.0"
 #define FERMI_DEVICE "ESP32"
 
@@ -31,7 +32,8 @@ static System_t System;
 //////////////////////////////////////////////
 
 #define FERMI_CLOUD_FUNCTION_HANDLERS 10
-#define FERMI_CLOUD_MQTT_URI "mqtts://fermicloud.dev:8883"
+#define FERMI_CLOUD_MQTT_URI "wss://fermicloud.dev:8084/mqtt"
+// #define FERMI_CLOUD_MQTT_URI "mqtts://fermicloud.dev:8883"
 
 enum FetchAccessTokenResult {
     FC_OK = 0,
@@ -47,35 +49,30 @@ enum FetchAccessTokenResult {
 // This certificate is valid until 04/06/2035, 18:04:38 GMT+7
 const char* fermiRootCACertificate = \
 "-----BEGIN CERTIFICATE-----\n" \
-"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\n" \
+"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\n" \
-"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\n" \
+"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\n" \
+"VQD9F6Na/+zmXCc=\n" \
 "-----END CERTIFICATE-----\n";
 
 typedef enum
@@ -266,6 +263,37 @@ struct Fermion
       }
     }
 
+    String fetchUsername() {
+        WiFiClientSecure client;
+        client.setCACert(fermiRootCACertificate);
+        {
+            HTTPClient https;
+            https.setConnectTimeout(5000);
+            https.setTimeout(5000);
+            https.begin(client, FERMI_CLOUD_USERINFO_URL);
+            https.addHeader("Authorization", "Bearer " + accessToken);
+            
+            int httpCode = https.GET();
+            ESP_WML_LOGINFO1(F("s:Userinfo status code = "), httpCode);
+            
+            String username;
+            if (httpCode == 200) {
+                StaticJsonDocument<512> doc;
+                DeserializationError error = deserializeJson(doc, https.getStream());
+                if (!error) {
+                    username = doc["username"].as<const char*>();
+                    ESP_WML_LOGINFO1(F("s:Username = "), username.c_str());
+                } else {
+                    ESP_WML_LOGINFO1(F("s:Userinfo deserialisation error: "), error.c_str());
+                }
+            } else {
+                ESP_WML_LOGINFO1(F("s:Userinfo request failed with code: "), httpCode);
+            }
+            https.end();
+            return username;
+        }
+    }
+
     bool isConnected() {
         if (_gotDisconnected) {
             esp_mqtt_client_destroy(mqttClient);
@@ -281,13 +309,19 @@ struct Fermion
         if (!isConnected()) {
             // ESP_WML_LOGINFO1(F("s:Access token: %s"), accessToken.c_str());
             // ESP_WML_LOGINFO1(F("s:Heap free: %s"), ESP.getFreeHeap());
+
+            // Fetch username from userinfo endpoint
+            String username = fetchUsername();
+            if (username.length() == 0) {
+                return false;
+            }
+
             esp_mqtt_client_config_t mqtt_cfg = {
                 .uri = FERMI_CLOUD_MQTT_URI,
-                // .client_id = deviceID.c_str(),
-                // .username = "",
+                .client_id = deviceID.c_str(),
+                .username = username.c_str(),
                 .password = accessToken.c_str(),
                 .cert_pem = fermiRootCACertificate,
-                .protocol_ver = MQTT_PROTOCOL_V_3_1,
                 .out_buffer_size = 2048,
             };
             mqttClient = esp_mqtt_client_init(&mqtt_cfg);
@@ -512,7 +546,7 @@ struct Fermion
                 
                 // Send function result back
                 char responseTopic[300];
-                snprintf(responseTopic, sizeof(responseTopic), "users/mqtt_user/devices/%s/functions/%s/result", deviceID.c_str(), handler.funcKey.c_str());
+                snprintf(responseTopic, sizeof(responseTopic), "devices/%s/functions/%s/result", deviceID.c_str(), handler.funcKey.c_str());
                 
                 // Create JSON response
                 StaticJsonDocument<256> responseDoc;
@@ -605,7 +639,7 @@ struct Fermion
 private:
 
     void _getDeviceTopic(char *buffer, size_t length, const char *eventName) {
-        strncpy(buffer, "users/mqtt_user/devices/", length - 1);
+        strncpy(buffer, "devices/", length - 1);
         strncat(buffer, deviceID.c_str(), length - 1);
         strncat(buffer, "/", length - 1);
         strncat(buffer, eventName, length - 1);
@@ -613,7 +647,7 @@ private:
     }
 
     void _getEventTopic(char *buffer, size_t length, const char *eventName) {
-        strncpy(buffer, "users/mqtt_user/devices/", length - 1);
+        strncpy(buffer, "devices/", length - 1);
         strncat(buffer, deviceID.c_str(), length - 1);
         strncat(buffer, "/events/", length - 1);
         strncat(buffer, eventName, length - 1);
@@ -621,7 +655,7 @@ private:
     }
 
     void _getFunctionTopic(char *buffer, size_t length, const char *funcName) {
-        strncpy(buffer, "users/mqtt_user/devices/", length - 1);
+        strncpy(buffer, "devices/", length - 1);
         strncat(buffer, deviceID.c_str(), length - 1);
         strncat(buffer, "/functions/", length - 1);
         strncat(buffer, funcName, length - 1);
@@ -630,7 +664,7 @@ private:
 
     // Compare a topic with a function name without generating the expected topic
     bool _compareFunctionTopic(const char *topic, const char *funcName) {
-        return strncmp(topic, "users/mqtt_user/devices/", 28) == 0 &&
+        return strncmp(topic, "devices/", 28) == 0 &&
                strncmp(topic + 28, deviceID.c_str(), deviceID.length()) == 0 &&
                strncmp(topic + 28 + deviceID.length(), "/functions/", 11) == 0 &&
                strncmp(topic + 28 + deviceID.length() + 11, funcName, strlen(funcName)) == 0;
