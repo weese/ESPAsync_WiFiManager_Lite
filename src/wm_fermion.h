@@ -31,9 +31,21 @@ static System_t System;
 
 //////////////////////////////////////////////
 
-#define FERMI_CLOUD_EVENT_HANDLERS      20
-#define FERMI_CLOUD_FUNCTION_HANDLERS   20
-#define FERMI_CLOUD_VARIABLE_HANDLERS   20
+#define FERMI_CLOUD_EVENT_HANDLERS          20
+#define FERMI_CLOUD_FUNCTION_HANDLERS       20
+#define FERMI_CLOUD_VARIABLES               20
+
+#define FERMI_CLOUD_DEVICE_ID_LENGTH        32
+#define FERMI_CLOUD_EVENT_NAME_LENGTH       64
+#define FERMI_CLOUD_FUNCTION_NAME_LENGTH    64
+#define FERMI_CLOUD_VARIABLE_NAME_LENGTH    64
+
+
+#define FERMI_CLOUD_BASE_BUFFER_LENGTH           (sizeof("devices/") + FERMI_CLOUD_DEVICE_ID_LENGTH + 1)
+#define FERMI_CLOUD_EVENT_TOPIC_BUFFER_LENGTH    (FERMI_CLOUD_BASE_BUFFER_LENGTH + sizeof("events/") + FERMI_CLOUD_EVENT_NAME_LENGTH + 1)
+#define FERMI_CLOUD_FUNCTION_TOPIC_BUFFER_LENGTH (FERMI_CLOUD_BASE_BUFFER_LENGTH + sizeof("functions/") + FERMI_CLOUD_FUNCTION_NAME_LENGTH + 1)
+#define FERMI_CLOUD_VARIABLE_TOPIC_BUFFER_LENGTH (FERMI_CLOUD_BASE_BUFFER_LENGTH + sizeof("variables/") + FERMI_CLOUD_VARIABLE_NAME_LENGTH + 1)
+
 #define FERMI_CLOUD_MQTT_URI            "wss://fermicloud.dev:8084/mqtt"
 // #define FERMI_CLOUD_MQTT_URI "mqtts://fermicloud.dev:8883"
 
@@ -101,7 +113,8 @@ const PublishFlag WITH_RETAIN(PUBLISH_EVENT_FLAG_RETAIN);
 
 typedef void (*EventHandlerFunction)(const char *event_name, const char *data);
 typedef void (*EventHandlerFunctionWithData)(void *handler_data, const char *event_name, const char *data);
-typedef int (*user_function_int_str_t)(String);
+typedef int (*CloudFunctionHandler)(String);
+typedef void (*CloudVariableSerializer)(JsonDocument &doc, const void *ref);
 
 struct CloudEventHandler
 {
@@ -114,37 +127,32 @@ struct CloudEventHandler
     void *data;
 };
 
-struct CloudFunctionHandler
+struct CloudFunction
 {
     String funcKey;
-    user_function_int_str_t func;
+    CloudFunctionHandler func;
 };
 
 // Structure for function request/response
-struct FunctionRequest {
+struct CloudFunctionRequest {
     uint32_t requestId;
     String parameters;
-};
-
-struct FunctionResponse {
-    uint32_t requestId;
-    int result;
 };
 
 struct CloudVariable {
     // name of the variable
     String name;
-    // type independent reference to the variable
-    void *ref;
-    // type of the variable
-    String type;
+    // function to serialize the variable
+    CloudVariableSerializer serializer;
+    // reference to the variable
+    const void *ref;
 };
 
-class Fermion {
+class FermiDevice {
 public:
     CloudEventHandler eventHandlers[FERMI_CLOUD_EVENT_HANDLERS];
-    CloudFunctionHandler functionHandlers[FERMI_CLOUD_FUNCTION_HANDLERS];
-    CloudVariable variables[FERMI_CLOUD_VARIABLE_HANDLERS];
+    CloudFunction functionHandlers[FERMI_CLOUD_FUNCTION_HANDLERS];
+    CloudVariable variables[FERMI_CLOUD_VARIABLES];
     uint8_t eventHandlerCount;
     uint8_t functionHandlerCount;
     uint8_t variableCount;
@@ -155,9 +163,10 @@ public:
     String accessToken;
 
 
-    Fermion() : 
+    FermiDevice() : 
         eventHandlerCount(0),
         functionHandlerCount(0),
+        variableCount(0),
         _gotDisconnected(false),
         _isConnected(false),
         deviceID(wmHostname()),
@@ -172,7 +181,7 @@ public:
         // esp_log_level_set("OUTBOX", ESP_LOG_VERBOSE);
     }
     
-    ~Fermion() {
+    ~FermiDevice() {
         if (isConnected())
             disconnect();
     }
@@ -399,14 +408,18 @@ public:
 
     int publish(const char *eventName, const char *eventData, PublishFlags flags)
     {
-        char topic[300];
+        if (strlen(eventName) > FERMI_CLOUD_EVENT_NAME_LENGTH) {
+            ESP_WML_LOGERROR(F("s:Event name too long"));
+            return -1;
+        }
+        char topic[FERMI_CLOUD_EVENT_TOPIC_BUFFER_LENGTH];
         _getEventTopic(topic, sizeof(topic), eventName);
         return esp_mqtt_client_publish(mqttClient, topic, eventData, 0, 0, flags & WITH_RETAIN ? 1 : 0);
     }
 
     bool subscribe(const char *eventName, EventHandlerFunction handler, SubscribeScopeEnum scope)
     {
-        char topic[300];
+        char topic[FERMI_CLOUD_EVENT_TOPIC_BUFFER_LENGTH];
         _getEventTopic(topic, sizeof(topic), eventName);
         if (esp_mqtt_client_subscribe(mqttClient, topic, 0) < 0)
             return false;
@@ -421,13 +434,13 @@ public:
 
     bool unsubscribe(const char *eventName)
     {
-        char topic[300];
+        char topic[FERMI_CLOUD_EVENT_TOPIC_BUFFER_LENGTH];
         _getEventTopic(topic, sizeof(topic), eventName);
         return esp_mqtt_client_unsubscribe(mqttClient, topic) >= 0;
     }
 
-    // Function registration methods
-    bool function(const char *funcKey, user_function_int_str_t func)
+    // Add a cloud function
+    bool function(const char *funcKey, CloudFunctionHandler func)
     {
         // Check if function with same name already exists
         for (uint8_t i = 0; i < functionHandlerCount; i++) {
@@ -445,7 +458,7 @@ public:
             return false;
         }
         
-        functionHandlers[functionHandlerCount] = CloudFunctionHandler{
+        functionHandlers[functionHandlerCount] = CloudFunction{
             .funcKey = String(funcKey),
             .func = func
         };
@@ -455,48 +468,58 @@ public:
         return true;
     }
 
-    template<typename T>
-    bool function(const T &name, user_function_int_str_t func)
-    {
-        return function(name, func);
-    }
-
-    // Remove/unregister a function
-    bool removeFunction(const char *funcKey)
-    {
-        for (uint8_t i = 0; i < functionHandlerCount; i++) {
-            if (functionHandlers[i].funcKey == funcKey) {
-                // Remove function by shifting remaining functions
-                for (uint8_t j = i; j < functionHandlerCount - 1; j++) {
-                    functionHandlers[j] = functionHandlers[j + 1];
-                }
-                functionHandlerCount--;
-                
-                ESP_WML_LOGINFO1(F("s:Function removed: "), funcKey);
-                return true;
-            }
-        }
-        
-        ESP_WML_LOGINFO1(F("s:Function not found for removal: "), funcKey);
-        return false;
-    }
-
-    // Check if a function is registered
-    bool hasFunction(const char *funcKey)
-    {
-        for (uint8_t i = 0; i < functionHandlerCount; i++) {
-            if (functionHandlers[i].funcKey == funcKey) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     // bool subscribe(System.deviceID() + "/" PREFIX_WIDGET, handlerWidget, MY_DEVICES);
 
     // Particle.function("notify", handlerNotificationFunction);
 
-    bool publishCapabilities() {
+    // Add a cloud variable
+    template <typename T>
+    bool variable(const char *name, const T &ref)
+    {
+        return _variable(name, [](JsonDocument &doc, const void *ref) {
+            doc["v"] = *(const T *)ref;
+        }, &ref);
+    }
+
+    // Add a calculated cloud variable
+    template <typename T>
+    bool variable(const char *name, T (*func)())
+    {
+        return _variable(name, [](JsonDocument &doc, const void *ref) {
+            doc["v"] = ((T (*)()) ref)();
+        }, (void *) func);
+    }
+
+    bool _variable(const char *name, CloudVariableSerializer serializer, const void *ref)
+    {
+        // Check if variable with same name already exists
+        for (uint8_t i = 0; i < variableCount; i++) {
+            if (variables[i].name == name) {
+                // Replace existing variable
+                variables[i].serializer = serializer;
+                variables[i].ref = ref;
+                ESP_WML_LOGINFO1(F("s:Variable replaced: "), name);
+                return true;
+            }
+        }
+        
+        // Add new function if we have space
+        if (variableCount >= FERMI_CLOUD_VARIABLES) {
+            ESP_WML_LOGERROR(F("s:Too many variables registered"));
+            return false;
+        }
+        
+        variables[variableCount] = {
+            .name = String(name),
+            .serializer = serializer,
+            .ref = ref,
+        };
+        variableCount++;
+        return true;
+    }
+
+    bool publishCapabilities() 
+    {
         StaticJsonDocument<2048> doc;
 
         // Iterate over all functionHandler funcKeys and append them to the funcs array
@@ -517,7 +540,7 @@ public:
 
         String payload;
         serializeJson(doc, payload);
-        char topic[100];
+        char topic[FERMI_CLOUD_BASE_BUFFER_LENGTH + sizeof("capabilities") + 1];
         _getDeviceTopic(topic, sizeof(topic), "capabilities");
         return esp_mqtt_client_publish(mqttClient, topic, payload.c_str(), 0, 1, 1) != -1;
     }
@@ -527,7 +550,7 @@ public:
         for (uint8_t i = 0; i < eventHandlerCount; i++)
         {
             CloudEventHandler &handler = eventHandlers[i];
-            if (strncmp(topic, handler.topic.c_str(), topic_length) == 0)
+            if (handler.topic.length() == topic_length && strncmp(topic, handler.topic.c_str(), topic_length) == 0)
             {
                 if (handler.data)
                     handler.funcWithData(handler.data, topic, payload);
@@ -537,16 +560,15 @@ public:
         }
     }
 
-    bool functionCallback(const char *topic, size_t topic_len, const char *payload, size_t length)
+    void functionCallback(const char *topic, size_t topic_len, const char *payload, size_t length)
     {
         for (uint8_t i = 0; i < functionHandlerCount; i++)
         {
-            CloudFunctionHandler &handler = functionHandlers[i];
-            if (strncmp(topic, handler.funcKey.c_str(), topic_len) == 0) {
+            CloudFunction &handler = functionHandlers[i];
+            if (handler.funcKey.length() == topic_len && strncmp(handler.funcKey.c_str(), topic, topic_len) == 0) {
                 // Parse the request payload
                 String payloadStr(payload, length);
-                FunctionRequest request;
-                FunctionResponse response;
+                CloudFunctionRequest request;
                 
                 // Try to parse as JSON first
                 StaticJsonDocument<512> doc;
@@ -565,31 +587,47 @@ public:
                 // Execute the function
                 int result = handler.func(request.parameters);
                 
-                // Prepare response
-                response.requestId = request.requestId;
-                response.result = result;
+                String responseJson;
+                {
+                    // Create JSON response
+                    StaticJsonDocument<256> responseDoc;
+                    responseDoc["i"] = request.requestId;
+                    responseDoc["r"] = result;
+                    
+                    serializeJson(responseDoc, responseJson);
+                }
                 
                 // Send function result back
-                char responseTopic[300];
-                snprintf(responseTopic, sizeof(responseTopic), "devices/%s/functions/%s/result", deviceID.c_str(), handler.funcKey.c_str());
-                
-                // Create JSON response
-                StaticJsonDocument<256> responseDoc;
-                responseDoc["i"] = response.requestId;
-                responseDoc["r"] = response.result;
-                
-                String responseJson;
-                serializeJson(responseDoc, responseJson);
-                
+                char responseTopic[FERMI_CLOUD_FUNCTION_TOPIC_BUFFER_LENGTH + sizeof("/response")];
+                snprintf(responseTopic, sizeof(responseTopic), "devices/%s/functions/%s/response", deviceID.c_str(), handler.funcKey.c_str());
                 esp_mqtt_client_publish(mqttClient, responseTopic, responseJson.c_str(), 0, 0, 0);
-                return true;
             }
         }
-        return false;
+    }
+
+    void variableCallback(const char *topic, size_t topic_len)
+    {
+        for (uint8_t i = 0; i < variableCount; i++) {
+            CloudVariable &variable = variables[i];
+            if (variable.name.length() == topic_len && strncmp(variable.name.c_str(), topic, topic_len) == 0) {
+                String responseJson;
+                {
+                    // Create JSON response
+                    StaticJsonDocument<256> responseDoc;
+                    variable.serializer(responseDoc, variable.ref);
+                    serializeJson(responseDoc, responseJson);
+                }
+                                
+                // Send variable value back
+                char responseTopic[FERMI_CLOUD_VARIABLE_TOPIC_BUFFER_LENGTH + sizeof("/value")];
+                snprintf(responseTopic, sizeof(responseTopic), "devices/%s/variables/%s/value", deviceID.c_str(), variable.name.c_str());
+                esp_mqtt_client_publish(mqttClient, responseTopic, responseJson.c_str(), 0, 0, 0);
+            }
+        }
     }
 
     static void mqttHandlerStatic(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
-        ((Fermion *)handler_args)->mqttHandler(base, event_id, event_data);
+        ((FermiDevice *)handler_args)->mqttHandler(base, event_id, event_data);
     }
 
     esp_err_t mqttHandler(esp_event_base_t base, int32_t event_id, void *event_data)
@@ -606,14 +644,22 @@ public:
         case MQTT_EVENT_CONNECTED:
             Serial.println("MQTT_EVENT_CONNECTED");
             _isConnected = true;
+
             // Subscribe to all handler topics
             for (uint8_t i = 0; i < eventHandlerCount; i++)
                 esp_mqtt_client_subscribe(client, eventHandlers[i].topic.c_str(), 0);
 
             // Subscribe to all function topics
             {
-                char topic[100];
+                char topic[FERMI_CLOUD_BASE_BUFFER_LENGTH + sizeof("functions/#") + 1];
                 _getDeviceTopic(topic, sizeof(topic), "functions/#");
+                esp_mqtt_client_subscribe(mqttClient, topic, 0);
+            }
+
+            // Subscribe to all variable topics
+            {
+                char topic[FERMI_CLOUD_BASE_BUFFER_LENGTH + sizeof("variables/#") + 1];
+                _getDeviceTopic(topic, sizeof(topic), "variables/#");
                 esp_mqtt_client_subscribe(mqttClient, topic, 0);
             }
 
@@ -654,14 +700,18 @@ public:
             topic_len -= deviceID.length();
 
             // Check if the topic is a function or event
-            if (strncmp(topic, "/functions/", 11) == 0) {
-                topic += 11;
-                topic_len -= 11;
-                functionCallback(topic, topic_len, event->data, event->data_len);
-            } else if (strncmp(topic, "/events/", 8) == 0) {
+            if (strncmp(topic, "/events/", 8) == 0) {
                 topic += 8;
                 topic_len -= 8;
                 eventCallback(topic, topic_len, event->data, event->data_len);
+            } else if (strncmp(topic, "/functions/", 11) == 0) {
+                topic += 11;
+                topic_len -= 11;
+                functionCallback(topic, topic_len, event->data, event->data_len);
+            } else if (strncmp(topic, "/variables/", 11) == 0) {
+                topic += 11;
+                topic_len -= 11;
+                variableCallback(topic, topic_len);
             }
             break;
 
@@ -691,6 +741,7 @@ private:
     }
 };
 
-Fermion Particle;
+FermiDevice Fermion;
+FermiDevice &Particle = Fermion;    // alias for Fermion for easier migration
 
 #endif // wm_fermion_h_
