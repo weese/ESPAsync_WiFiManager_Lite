@@ -31,8 +31,10 @@ static System_t System;
 
 //////////////////////////////////////////////
 
-#define FERMI_CLOUD_FUNCTION_HANDLERS 10
-#define FERMI_CLOUD_MQTT_URI "wss://fermicloud.dev:8084/mqtt"
+#define FERMI_CLOUD_EVENT_HANDLERS      20
+#define FERMI_CLOUD_FUNCTION_HANDLERS   20
+#define FERMI_CLOUD_VARIABLE_HANDLERS   20
+#define FERMI_CLOUD_MQTT_URI            "wss://fermicloud.dev:8084/mqtt"
 // #define FERMI_CLOUD_MQTT_URI "mqtts://fermicloud.dev:8883"
 
 enum FetchAccessTokenResult {
@@ -97,25 +99,25 @@ const PublishFlag NO_ACK(PUBLISH_EVENT_FLAG_NO_ACK);
 const PublishFlag WITH_ACK(PUBLISH_EVENT_FLAG_WITH_ACK);
 const PublishFlag WITH_RETAIN(PUBLISH_EVENT_FLAG_RETAIN);
 
-typedef void (*EventHandler)(const char *event_name, const char *data);
-typedef void (*EventHandlerWithData)(void *handler_data, const char *event_name, const char *data);
+typedef void (*EventHandlerFunction)(const char *event_name, const char *data);
+typedef void (*EventHandlerFunctionWithData)(void *handler_data, const char *event_name, const char *data);
 typedef int (*user_function_int_str_t)(String);
 
-struct FunctionHandler
+struct CloudEventHandler
 {
+    String topic;
     union
     {
-        EventHandler func;
-        EventHandlerWithData funcWithData;
+        EventHandlerFunction func;
+        EventHandlerFunctionWithData funcWithData;
     };
-    String topic;
     void *data;
 };
 
 struct CloudFunctionHandler
 {
-    user_function_int_str_t func;
     String funcKey;
+    user_function_int_str_t func;
 };
 
 // Structure for function request/response
@@ -129,12 +131,23 @@ struct FunctionResponse {
     int result;
 };
 
-struct Fermion
-{
-    FunctionHandler handlers[FERMI_CLOUD_FUNCTION_HANDLERS];
+struct CloudVariable {
+    // name of the variable
+    String name;
+    // type independent reference to the variable
+    void *ref;
+    // type of the variable
+    String type;
+};
+
+class Fermion {
+public:
+    CloudEventHandler eventHandlers[FERMI_CLOUD_EVENT_HANDLERS];
     CloudFunctionHandler functionHandlers[FERMI_CLOUD_FUNCTION_HANDLERS];
-    uint8_t handlerCount;
+    CloudVariable variables[FERMI_CLOUD_VARIABLE_HANDLERS];
+    uint8_t eventHandlerCount;
     uint8_t functionHandlerCount;
+    uint8_t variableCount;
     bool _gotDisconnected;
     bool _isConnected;
     esp_mqtt_client_handle_t mqttClient;
@@ -143,7 +156,7 @@ struct Fermion
 
 
     Fermion() : 
-        handlerCount(0),
+        eventHandlerCount(0),
         functionHandlerCount(0),
         _gotDisconnected(false),
         _isConnected(false),
@@ -347,6 +360,8 @@ struct Fermion
                 return false;
             }
             ESP_WML_LOGINFO(F("s:esp_mqtt_client_start() ok."));
+            
+            publishCapabilities();
 
             return true;
         }
@@ -389,18 +404,18 @@ struct Fermion
         return esp_mqtt_client_publish(mqttClient, topic, eventData, 0, 0, flags & WITH_RETAIN ? 1 : 0);
     }
 
-    bool subscribe(const char *eventName, EventHandler handler, SubscribeScopeEnum scope)
+    bool subscribe(const char *eventName, EventHandlerFunction handler, SubscribeScopeEnum scope)
     {
         char topic[300];
         _getEventTopic(topic, sizeof(topic), eventName);
         if (esp_mqtt_client_subscribe(mqttClient, topic, 0) < 0)
             return false;
-        handlers[handlerCount] = FunctionHandler{
-            .func = handler,
+        eventHandlers[eventHandlerCount] = CloudEventHandler{
             .topic = topic,
+            .func = handler,
             .data = NULL,
         };
-        handlerCount++;
+        eventHandlerCount++;
         return true;
     }
 
@@ -431,17 +446,10 @@ struct Fermion
         }
         
         functionHandlers[functionHandlerCount] = CloudFunctionHandler{
-            .func = func,
-            .funcKey = String(funcKey)
+            .funcKey = String(funcKey),
+            .func = func
         };
         functionHandlerCount++;
-        
-        // Subscribe to function topic
-        char topic[300];
-        _getFunctionTopic(topic, sizeof(topic), funcKey);
-        if (isConnected()) {
-            esp_mqtt_client_subscribe(mqttClient, topic, 0);
-        }
         
         ESP_WML_LOGINFO1(F("s:Function registered: "), funcKey);
         return true;
@@ -458,13 +466,6 @@ struct Fermion
     {
         for (uint8_t i = 0; i < functionHandlerCount; i++) {
             if (functionHandlers[i].funcKey == funcKey) {
-                // Unsubscribe from function topic
-                char topic[300];
-                _getFunctionTopic(topic, sizeof(topic), funcKey);
-                if (isConnected()) {
-                    esp_mqtt_client_unsubscribe(mqttClient, topic);
-                }
-                
                 // Remove function by shifting remaining functions
                 for (uint8_t j = i; j < functionHandlerCount - 1; j++) {
                     functionHandlers[j] = functionHandlers[j + 1];
@@ -495,12 +496,38 @@ struct Fermion
 
     // Particle.function("notify", handlerNotificationFunction);
 
-    void handlerCallback(char *topic, const char *payload, unsigned int length)
-    {
-        for (uint8_t i = 0; i < handlerCount; i++)
+    bool publishCapabilities() {
+        StaticJsonDocument<2048> doc;
+
+        // Iterate over all functionHandler funcKeys and append them to the funcs array
         {
-            FunctionHandler &handler = handlers[i];
-            if (handler.topic == topic)
+            JsonArray funcs = doc["f"].to<JsonArray>();        
+            for (uint8_t i = 0; i < functionHandlerCount; i++) {
+                funcs.add(functionHandlers[i].funcKey.c_str());
+            }
+        }
+
+        // Iterate over all variable names and append them to the vars array
+        {
+            JsonArray vars = doc["v"].to<JsonArray>();        
+            for (uint8_t i = 0; i < variableCount; i++) {
+                vars.add(variables[i].name.c_str());
+            }
+        }
+
+        String payload;
+        serializeJson(doc, payload);
+        char topic[100];
+        _getDeviceTopic(topic, sizeof(topic), "capabilities");
+        return esp_mqtt_client_publish(mqttClient, topic, payload.c_str(), 0, 1, 1) != -1;
+    }
+
+    void eventCallback(const char *topic, size_t topic_length, const char *payload, size_t length)
+    {
+        for (uint8_t i = 0; i < eventHandlerCount; i++)
+        {
+            CloudEventHandler &handler = eventHandlers[i];
+            if (strncmp(topic, handler.topic.c_str(), topic_length) == 0)
             {
                 if (handler.data)
                     handler.funcWithData(handler.data, topic, payload);
@@ -510,14 +537,12 @@ struct Fermion
         }
     }
 
-    bool functionCallback(char *topic, const char *payload, unsigned int length)
+    bool functionCallback(const char *topic, size_t topic_len, const char *payload, size_t length)
     {
         for (uint8_t i = 0; i < functionHandlerCount; i++)
         {
             CloudFunctionHandler &handler = functionHandlers[i];
-            
-            if (_compareFunctionTopic(topic, handler.funcKey.c_str()))
-            {
+            if (strncmp(topic, handler.funcKey.c_str(), topic_len) == 0) {
                 // Parse the request payload
                 String payloadStr(payload, length);
                 FunctionRequest request;
@@ -557,10 +582,6 @@ struct Fermion
                 serializeJson(responseDoc, responseJson);
                 
                 esp_mqtt_client_publish(mqttClient, responseTopic, responseJson.c_str(), 0, 0, 0);
-                
-                ESP_WML_LOGINFO1(F("s:Function called: "), handler.funcKey.c_str());
-                ESP_WML_LOGINFO1(F("s:Request ID: "), request.requestId);
-                ESP_WML_LOGINFO1(F("s:Function result: "), result);
                 return true;
             }
         }
@@ -576,6 +597,8 @@ struct Fermion
         Serial.printf("Event dispatched from event loop base=%s, event_id=%d", base, event_id);
         esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)event_data;
         esp_mqtt_client_handle_t client = event->client;
+        const char* topic = event->topic;
+        size_t topic_len = event->topic_len;
         int msg_id;
 
         switch (event_id)
@@ -584,14 +607,16 @@ struct Fermion
             Serial.println("MQTT_EVENT_CONNECTED");
             _isConnected = true;
             // Subscribe to all handler topics
-            for (uint8_t i = 0; i < handlerCount; i++)
-                esp_mqtt_client_subscribe(client, handlers[i].topic.c_str(), 0);
+            for (uint8_t i = 0; i < eventHandlerCount; i++)
+                esp_mqtt_client_subscribe(client, eventHandlers[i].topic.c_str(), 0);
+
             // Subscribe to all function topics
-            for (uint8_t i = 0; i < functionHandlerCount; i++) {
-                char topic[300];
-                _getFunctionTopic(topic, sizeof(topic), functionHandlers[i].funcKey.c_str());
-                esp_mqtt_client_subscribe(client, topic, 0);
+            {
+                char topic[100];
+                _getDeviceTopic(topic, sizeof(topic), "functions/#");
+                esp_mqtt_client_subscribe(mqttClient, topic, 0);
             }
+
             hello();
             
             break;
@@ -617,15 +642,26 @@ struct Fermion
 
         case MQTT_EVENT_DATA:
             Serial.println("MQTT_EVENT_DATA");
-            Serial.printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
-            Serial.printf("DATA=%.*s\r\n", event->data_len, event->data);
-            
-            // Check if this is a function call
-            if (functionCallback(event->topic, event->data, event->data_len)) {
-                // Function was handled
-            } else {
-                // Handle as regular event
-                handlerCallback(event->topic, event->data, event->data_len);
+            Serial.printf("TOPIC=%.*s\n", event->topic_len, event->topic);
+            Serial.printf("DATA=%.*s\n", event->data_len, event->data);
+
+            // Check if the topic is for this device
+            if (strncmp(topic, "devices/", 8) != 0) break;
+            topic += 8;
+            topic_len -= 8;
+            if (strncmp(topic, deviceID.c_str(), deviceID.length()) != 0) break;
+            topic += deviceID.length();
+            topic_len -= deviceID.length();
+
+            // Check if the topic is a function or event
+            if (strncmp(topic, "/functions/", 11) == 0) {
+                topic += 11;
+                topic_len -= 11;
+                functionCallback(topic, topic_len, event->data, event->data_len);
+            } else if (strncmp(topic, "/events/", 8) == 0) {
+                topic += 8;
+                topic_len -= 8;
+                eventCallback(topic, topic_len, event->data, event->data_len);
             }
             break;
 
@@ -638,11 +674,11 @@ struct Fermion
 
 private:
 
-    void _getDeviceTopic(char *buffer, size_t length, const char *eventName) {
+    void _getDeviceTopic(char *buffer, size_t length, const char *subTopic) {
         strncpy(buffer, "devices/", length - 1);
         strncat(buffer, deviceID.c_str(), length - 1);
         strncat(buffer, "/", length - 1);
-        strncat(buffer, eventName, length - 1);
+        strncat(buffer, subTopic, length - 1);
         buffer[length - 1] = '\0'; // Ensure null-terminated
     }
 
@@ -652,22 +688,6 @@ private:
         strncat(buffer, "/events/", length - 1);
         strncat(buffer, eventName, length - 1);
         buffer[length - 1] = '\0'; // Ensure null-terminated
-    }
-
-    void _getFunctionTopic(char *buffer, size_t length, const char *funcName) {
-        strncpy(buffer, "devices/", length - 1);
-        strncat(buffer, deviceID.c_str(), length - 1);
-        strncat(buffer, "/functions/", length - 1);
-        strncat(buffer, funcName, length - 1);
-        buffer[length - 1] = '\0'; // Ensure null-terminated
-    }
-
-    // Compare a topic with a function name without generating the expected topic
-    bool _compareFunctionTopic(const char *topic, const char *funcName) {
-        return strncmp(topic, "devices/", 28) == 0 &&
-               strncmp(topic + 28, deviceID.c_str(), deviceID.length()) == 0 &&
-               strncmp(topic + 28 + deviceID.length(), "/functions/", 11) == 0 &&
-               strncmp(topic + 28 + deviceID.length() + 11, funcName, strlen(funcName)) == 0;
     }
 };
 
