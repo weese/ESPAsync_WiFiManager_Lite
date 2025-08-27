@@ -570,18 +570,20 @@ public:
                 String payloadStr(payload, length);
                 CloudFunctionRequest request;
                 
-                // Try to parse as JSON first
-                StaticJsonDocument<512> doc;
-                DeserializationError error = deserializeJson(doc, payloadStr);
-                
-                if (!error) {
-                    // JSON format: {"i": 123, "p": "param_value"}
-                    request.requestId = doc["i"] | 0;
-                    request.parameters = doc["p"] | payloadStr; // fallback to raw payload
-                } else {
-                    // Simple string format (backward compatibility)
-                    request.requestId = millis(); // generate simple ID
-                    request.parameters = payloadStr;
+                {
+                    // Try to parse as JSON first
+                    StaticJsonDocument<4000> doc;
+                    DeserializationError error = deserializeJson(doc, payloadStr);
+                    
+                    if (!error) {
+                        // JSON format: {"i": 123, "p": "param_value"}
+                        request.requestId = doc["i"].as<uint64_t>();
+                        request.parameters = doc["p"].as<String>();
+                    } else {
+                        // Simple string format (backward compatibility)
+                        request.requestId = millis(); // generate simple ID
+                        request.parameters = payloadStr;
+                    }
                 }
                 
                 // Execute the function
