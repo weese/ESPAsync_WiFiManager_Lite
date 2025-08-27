@@ -135,7 +135,7 @@ struct CloudFunction
 
 // Structure for function request/response
 struct CloudFunctionRequest {
-    uint32_t requestId;
+    uint64_t requestId;
     String parameters;
 };
 
@@ -285,7 +285,7 @@ public:
       }
     }
 
-    String fetchUsername() {
+    String fetchUserId() {
         WiFiClientSecure client;
         client.setCACert(fermiRootCACertificate);
         {
@@ -298,13 +298,13 @@ public:
             int httpCode = https.GET();
             ESP_WML_LOGINFO1(F("s:Userinfo status code = "), httpCode);
             
-            String username;
+            String userId;
             if (httpCode == 200) {
                 StaticJsonDocument<512> doc;
                 DeserializationError error = deserializeJson(doc, https.getStream());
                 if (!error) {
-                    username = doc["username"].as<const char*>();
-                    ESP_WML_LOGINFO1(F("s:Username = "), username.c_str());
+                    userId = doc["sub"].as<const char*>();
+                    ESP_WML_LOGINFO1(F("s:UserId = "), userId.c_str());
                 } else {
                     ESP_WML_LOGINFO1(F("s:Userinfo deserialisation error: "), error.c_str());
                 }
@@ -312,7 +312,7 @@ public:
                 ESP_WML_LOGINFO1(F("s:Userinfo request failed with code: "), httpCode);
             }
             https.end();
-            return username;
+            return userId;
         }
     }
 
@@ -332,16 +332,16 @@ public:
             // ESP_WML_LOGINFO1(F("s:Access token: %s"), accessToken.c_str());
             // ESP_WML_LOGINFO1(F("s:Heap free: %s"), ESP.getFreeHeap());
 
-            // Fetch username from userinfo endpoint
-            String username = fetchUsername();
-            if (username.length() == 0) {
+            // Fetch userId from userinfo endpoint
+            String userId = fetchUserId();
+            if (userId.length() == 0) {
                 return false;
             }
 
             esp_mqtt_client_config_t mqtt_cfg = {
                 .uri = FERMI_CLOUD_MQTT_URI,
                 .client_id = deviceID.c_str(),
-                .username = username.c_str(),
+                .username = userId.c_str(),
                 .password = accessToken.c_str(),
                 .cert_pem = fermiRootCACertificate,
                 .out_buffer_size = 2048,
